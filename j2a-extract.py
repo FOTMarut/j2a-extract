@@ -1,16 +1,17 @@
 from __future__ import print_function
-import os
+import sys
 import struct
 import misc
 from j2a import J2A #http://www.jazz2online.com/junk/j2a.py
 
-input = getattr(__builtins__, "raw_input", input)
+if sys.version_info[0] <= 2:
+    input = raw_input
 
 def main():
-    animsfilename = os.sys.argv[1] if (len(os.sys.argv) >= 2) else \
+    animsfilename = sys.argv[1] if (len(sys.argv) >= 2) else \
         input("Please type the animsfilename of the .j2a file you wish to extract:\n")
     j2a = J2A(animsfilename)
-    j2a.read_header()
+    j2a.read()
     outputdir = os.path.join(os.path.dirname(animsfilename), os.path.basename(animsfilename).replace('.', '-'))
     for setnum in range(j2a.header["setcount"]):
         # The shareware demo (or at least the TSF one) removes some of the animsets to save on filesize,

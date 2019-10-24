@@ -24,7 +24,7 @@ def show_frame(set_num, anim_num, frame_num):
 def _read_hdr():
     global anims_path
     anims = J2A(anims_path)
-    anims.read_header()
+    anims.read()
     return anims
 
 def print_j2a_stats():
@@ -40,7 +40,7 @@ def print_j2a_stats():
 
 def print_setoffsets(filename):
     anims = _read_hdr()
-    with open(filename, "w") as f: 
+    with open(filename, "w") as f:
         print(*anims.setoffsets, sep='\n', file=f)
 #         print(
 #             *sorted(anims.setdata, key=lambda x : (x["samplecount"], x["animcount"], x["framecount"])),
@@ -49,7 +49,7 @@ def print_setoffsets(filename):
 
 def print_setdata(filename):
     anims = _read_hdr()
-    with open(filename, "w") as f: 
+    with open(filename, "w") as f:
         print(*(sorted(elt.items()) for elt in anims.setdata), sep='\n', file=f)
 #         print(
 #             *sorted(anims.setdata, key=lambda x : (x["samplecount"], x["animcount"], x["framecount"])),
@@ -88,21 +88,22 @@ def stress_test(initial_set_num = 0):
 
 #############################################################################################################
 
-fmap = {k: v for k,v in globals().items() if isinstance(v, FunctionType) and not k.startswith('_')}
+if __name__ == "__main__":
+    fmap = {k: v for k,v in globals().items() if isinstance(v, FunctionType) and not k.startswith('_')}
 
-assert(int(True) is 1)
-isint = lambda x : x[int(x[:1] in '+-'):].isdigit()
+    assert(int(True) is 1)
+    isint = lambda x : x[int(x[:1] in '+-'):].isdigit()
 
-anims_path = None
-fargs = []
-for arg in sys.argv[2:]:
-    if arg.endswith('.j2a'):
-        anims_path = arg
-    else:
-        if isint(arg): # Don't use integers for file names
-            arg = int(arg)
-        fargs.append(arg)
-anims_path = anims_path or os.path.join(os.path.dirname(sys.argv[0]), "Anims.j2a")
+    anims_path = None
+    fargs = []
+    for arg in sys.argv[2:]:
+        if arg.endswith('.j2a'):
+            anims_path = arg
+        else:
+            if isint(arg): # Don't use integers for file names
+                arg = int(arg)
+            fargs.append(arg)
+    anims_path = anims_path or os.path.join(os.path.dirname(sys.argv[0]), "Anims.j2a")
 
-print("Calling {} with arguments: {}".format(sys.argv[1], fargs))
-fmap[sys.argv[1]](*fargs)
+    print("Calling {} with arguments: {}".format(sys.argv[1], fargs))
+    fmap[sys.argv[1]](*fargs)

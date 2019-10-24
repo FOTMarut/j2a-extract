@@ -1,5 +1,6 @@
 from __future__ import print_function
 import os
+import sys
 import glob
 import struct
 import re
@@ -7,7 +8,8 @@ import zlib
 from PIL import Image
 import misc
 
-input = getattr(__builtins__, "raw_input", input)
+if sys.version_info[0] <= 2:
+    input = raw_input
 
 #leaf frame order:
 #0 1 2 1 0 3 4 5 6 7 8 9 3 4 5 6 7 8 9 0 1 2 1 0 10 11 12 13 14 15 16
@@ -94,10 +96,10 @@ def write_frame(frame, data2, data3, imageaddress):
     #print([bin(ord(c))[2:].rjust(8,'0')[::-1] for c in mask])
 
 def main():
-    dirname = os.sys.argv[1] if (len(os.sys.argv) >= 2) else \
+    dirname = sys.argv[1] if (len(sys.argv) >= 2) else \
         input("Please type the folder you wish to import:\n")
     dirname = os.path.normpath(dirname)
-    outfilename = os.sys.argv[2] if (len(os.sys.argv) >= 3) else \
+    outfilename = sys.argv[2] if (len(sys.argv) >= 3) else \
             dirname.replace("-j2a", ".j2a")
     if not os.path.isdir(dirname):
         print("Folder does not exist!")
@@ -109,7 +111,7 @@ def main():
     setcount = len(setdirlist)
     setdirlist.sort(key=alphanum_key)
     if setcount == 0:
-        print("No sets were found in that folder. No .j2a file will be compiled.", file=os.sys.stderr)
+        print("No sets were found in that folder. No .j2a file will be compiled.", file=sys.stderr)
         return 1
     setpositions = [(7+setcount)*4] #starts at header length
     j2a = open(outfilename, "wb")
@@ -179,6 +181,6 @@ def main():
     j2a.close()
     return 0
 
-    
+
 if __name__ == "__main__":
-    os.sys.exit(main())
+    sys.exit(main())
