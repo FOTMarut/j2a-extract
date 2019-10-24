@@ -3,13 +3,12 @@
 # thanks to neobeo/j2nsm for the file format specs
 # see http://www.jazz2online.com
 
+from __future__ import print_function
 import struct
 import os
 import zlib
-import math
 #needs python image library, http://www.pythonware.com/library/pil/
-import Image
-import ImageDraw
+from PIL import Image, ImageDraw
 
 import misc
 
@@ -22,16 +21,16 @@ class J2A:
     header = setdata = setoffsets = palette = None
     currentset = -1
 
-    def __init__(self, filename = "C:\Games\Jazz2\Anims.j2a"):
+    def __init__(self, filename):
         ''' loads file contents into memory '''
         try:
-            self.j2afile = open(filename, "rb")
+            j2afile = open(filename, "rb")
         except:
-            print("file %s could not be read!" % filename)
-            os._exit(0)
+            print("file %s could not be read!" % filename, file=os.sys.stderr)
+            os.sys.exit(1)
             
         self.filesize = os.path.getsize(filename)
-        self.j2afile = self.j2afile.read(self.filesize)
+        self.j2afile = j2afile.read(self.filesize)
         
     def get_substream(self, streamnum):
         offset = self.setoffsets[self.currentset]
@@ -44,16 +43,12 @@ class J2A:
         return zlib.decompressobj().decompress(chunk, data["u" + str(streamnum)])
     
     def read_header(self):
-        ''' reads and parses header '''
+        ''' reads and parses header, setdata and setoffsets '''
         if not self.header:
             self.header = misc.named_unpack(self._headerstruct, self.j2afile[:self._headersize])
-            setlength = self.header["setcount"] * 4
-            self.setdata = list()
-            self.setoffsets = list()
-            for i in range(0, self.header["setcount"]):
-                offset = struct.unpack("L", self.j2afile[self._headersize+(i*4):self._headersize+(i*4)+4])[0]
-                self.setoffsets.append(offset)
-                self.setdata.append(misc.named_unpack(self._animheaderstruct, self.j2afile[offset:offset+44]))
+            setcount = self.header["setcount"]
+            self.setoffsets = struct.unpack_from('<%iL' % setcount, self.j2afile, self._headersize)
+            self.setdata = tuple(misc.named_unpack(self._animheaderstruct, self.j2afile[offset:offset+44]) for offset in self.setoffsets)
             
         return self.header
         
@@ -64,8 +59,8 @@ class J2A:
         if -1 < setnum < self.header["setcount"]:
             self.currentset = setnum
         else:
-            print("set %s doesn't exist!" % setnum)
-            os._exit(0)
+            print("set %s doesn't exist!" % setnum, file=os.sys.stderr)
+            os.sys.exit(1)
         
     def get_palette(self, given = None):
         if not self.palette:
@@ -80,40 +75,33 @@ class J2A:
         return self.palette
             
     def make_pixelmap(self, raw):
-        width, height = struct.unpack("HH", raw[0:4])
-        if width >= 32768:
-            width -= 32768 #unset msb
+        width, height = struct.unpack_from("<HH", raw)
+        width &= 0x7FFF #unset msb
         raw = raw[4:]
-        #prepare pixelmap
-        map = list()
-        for i in range(0, height):
-            map.append(list())
-            for j in range(0, width):
-                map[i].append(0)
+        #prepare pixmap
+        pixmap = [[0]*width for _ in range(height)]
         #fill it with data! (image format parser)
         length = len(raw)
-        up = struct.unpack
         x = y = i = 0
+        # This loop fails silently if decoding would cause OOB exceptions
         while i < length:
-            byte = up("B", raw[i])[0]
-            if x > width or y > height:
-                break
+            byte = struct.unpack_from("<B", raw, i)[0]
+#             print("Byte: {:3}, {}".format(byte, ('<' if byte < 128 else '=' if byte == 128 else '>'))) # TODO: delme
             if byte > 128:
-                sub = raw[i+1:i+byte-127]
-                for j in range(0, byte-128):
-                    try:
-                        map[y][x] = up("B", sub[j])[0]
-                    except:
-                        break
-                    i += 1
-                    x += 1
+                byte -= 128
+                l = min(byte, width - x)
+                pixmap[y][x:x+l] = struct.unpack_from("<%iB" % l, raw, i+1)
+                x += byte
+                i += byte
             elif byte < 128:
                 x += byte
             else:
                 x = 0
                 y += 1
+                if y >= height:
+                    break
             i += 1
-        return map
+        return pixmap
     
     def render_pixelmap(self, pixelmap):
         width, height = (len(pixelmap[0]), len(pixelmap))
@@ -136,22 +124,21 @@ class J2A:
         img.putpalette(self.palettesequence)
         return img
         
-    def get_frame(self, coordinates):
-        ''' gets frame: coordinates should be a tuple (set, animation, frame) '''
+    def get_frame(self, set_num, anim_num, frame_num):
+        ''' gets image info and image corresponding to a specific set, animation and frame number '''
         if not self.header:
             self.read_header()
             
-        setnum, animnum, framenum = coordinates
-        self.load_set(setnum)
-        data = self.setdata[setnum]
+        self.load_set(set_num)
+        data = self.setdata[set_num]
         animinfo = self.get_substream(1)
         frameinfo = self.get_substream(2)
-        frameoffset = 0
-        for i in range(0, animnum):
+        frameoffset = frame_num
+        for i in range(0, anim_num):
             try:
                 info = misc.named_unpack(self._animinfostruct, animinfo[i*8:(i*8)+8])
             except:
-                print "couldnt load frame at coordinates %s" % repr(coordinates)
+                print("couldnt load frame at coordinates %s" % repr((set_num, anim_num, frame_num)))
                 return
             frameoffset += info["framecount"]
         info = misc.named_unpack(self._frameinfostruct, frameinfo[frameoffset*24:(frameoffset*24)+24])
@@ -160,12 +147,15 @@ class J2A:
         
         pixelmap = self.make_pixelmap(imagedata[dataoffset:])
         return [info, self.render_pixelmap(pixelmap)]
-    def render_frame(self, coordinates):
-        self.get_frame(coordinates)[1].save("preview.png", "PNG")
+
+    def render_frame(self, *coordinates):
+        self.get_frame(*coordinates)[1].save("preview.png", "PNG")
         
 def main():
-    j2a = J2A()
-    j2a.render_frame((9, 0, 11))
+    from sys import argv
+    filename = argv[1] if (len(argv) >= 2) else "C:\Games\Jazz2\Anims.j2a"
+    j2a = J2A(filename)
+    j2a.render_frame(9, 0, 6)
 
 if __name__ == "__main__":
     main()
