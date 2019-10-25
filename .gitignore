@@ -1,0 +1,4 @@
+*.swp
+*.j2a
+__pycache__
+*.pyc

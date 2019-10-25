@@ -23,39 +23,73 @@ def pairwise(iterable):
 
 class J2A:
     _headerstruct = "s4|signature/L|magic/L|headersize/h|version/h|unknown/L|filesize/L|crc32/L|setcount"
-    _animheaderstruct = "s4|signature/B|animcount/B|samplecount/h|framecount/l|priorsamplecount/l|c1/l|u1/l|c2/l|u2/l|c3/l|u3/l|c4/l|u4"
     _animinfostruct = "H|framecount/H|fps/l|reserved"
     _frameinfostruct = "H|width/H|height/h|coldspotx/h|coldspoty/h|hotspotx/h|hotspoty/h|gunspotx/h|gunspoty/L|imageoffset/L|maskoffset"
     _ALIBheadersize = 28
-    _ANIMheadersize = 44
+    _defaultpalette = "Diamondus_2.pal"
 
     class J2AParseError(Exception):
         pass
 
+    class Set(object):
+        _animheaderstruct = "s4|signature/B|animcount/B|samplecount/h|framecount/l|priorsamplecount/l|c1/l|u1/l|c2/l|u2/l|c3/l|u3/l|c4/l|u4"
+        _ANIMheadersize = 44
+
+        def __init__(self, *pargs, **kwargs):
+            if pargs:
+                self.header, self.chunks = pargs
+            else:
+                self.header = {(a+b):0 for a in "cu" for b in "1234"}
+                self.header.update(
+                    animcount=0,
+                    samplecount=0,
+                    framecount=0,
+                    priorsamplecount=kwargs["prevsamplecount"]
+                )
+                self.chunks = [bytes() for _ in range(4)] # TODO: fixme; these are not valid compressed streams
+
+        @staticmethod
+        def read(f, crc):
+            chunk = f.read(J2A.Set._ANIMheadersize)
+            crc = zlib.crc32(chunk, crc)
+            setheader = misc.named_unpack(J2A.Set._animheaderstruct, chunk)
+            assert(
+                (setheader["signature"], setheader["u1"], setheader["u2"]) ==
+                (b'ANIM', 8*setheader["animcount"], 24*setheader["framecount"])
+            )
+            setheader.pop("signature")
+            chunks = [f.read(setheader["c" + k]) for k in "1234"]
+            for chunk in chunks:
+                crc = zlib.crc32(chunk, crc)
+            return (J2A.Set(setheader, chunks), crc)
+
+        def get_substream(self, streamnum):
+            return zlib.decompress(self.chunks[streamnum-1])
+
     def __init__(self, filename):
         ''' initializes class, sets file name '''
-        self.header = self.setdata = self.setoffsets = self.palette = None
-        self.currentset = -1
+        self.header = self.palette = None
         self.set_filename(filename)
 
     def set_filename(self, filename):
         self.filename = filename
 
-    def get_substream(self, streamnum, setnum=None):
-        if setnum is None:
-            setnum = self.currentset
-
-        data = self.setdata[setnum]
-        suboffset = sum(data["c" + str(i)] for i in range(1, streamnum))
-
-        chunk = self.setchunks[setnum][suboffset:suboffset+data["c" + str(streamnum)]]
-        return zlib.decompressobj().decompress(chunk, data["u" + str(streamnum)])
+    @staticmethod
+    def _seek(f, newpos):
+        delta = newpos - f.tell()
+        if delta > 0:
+            print("Warning: skipping over %d bytes" % delta)
+            b = f.read(delta)
+            assert(len(b) == delta)
+        elif delta < 0:
+            raise J2AParseError("File is not a valid J2A file (overlapping sets)")
 
     def read(self):
         ''' reads whole J2A file, parses ALIB and ANIM headers and collects all sets '''
         if not self.header:
             with open(self.filename, "rb") as j2afile:
                 # TODO: maybe add a separate check for ALIB version?
+                # TODO: check for previous sample count consistency
                 try:
                     self.header = misc.named_unpack(self._headerstruct, j2afile.read(self._ALIBheadersize))
                     setcount = self.header["setcount"]
@@ -65,50 +99,38 @@ class J2A:
                     )
                     if self.header["unknown"] != 0x1808:
                         print("Warning: minor difference found in ALIB header. Ignoring...", file=sys.stderr)
+                    self.header.pop("signature")
                     raw = j2afile.read(4*setcount)
-                    self.setoffsets = struct.unpack('<%iL' % setcount, raw)
+                    setoffsets = struct.unpack('<%iL' % setcount, raw)
                     crc = zlib.crc32(raw)
-                    assert(self.setoffsets[0] == self.header["headersize"])
-                    self.setdata = []
-                    self.setchunks = []
-                    alloffsets = self.setoffsets + (self.header["filesize"],)
-                    setsizes = (b-a for a,b in pairwise(alloffsets))
-                    for size in setsizes:
-                        assert(size >= self._ANIMheadersize)
-                        raw = j2afile.read(size)
-                        crc = zlib.crc32(raw, crc)
-                        assert(len(raw) == size)
-                        setheader = misc.named_unpack(self._animheaderstruct, raw[:self._ANIMheadersize])
-                        assert(
-                            (setheader["signature"], setheader["u1"], setheader["u2"]) ==
-                            (b'ANIM', 8*setheader["animcount"], 24*setheader["framecount"])
-                        )
-                        assert(self._ANIMheadersize + setheader["c1"] + setheader["c2"] + setheader["c3"] + setheader["c4"] == size)
-                        self.setdata.append(setheader)
-                        self.setchunks.append(raw[self._ANIMheadersize:])
+                    assert(setoffsets[0] == self.header["headersize"])
+                    prevsamplecount = ps_miscounts = 0
+                    self.sets = []
+                    for offset in setoffsets:
+                        if offset == 0:
+                            self.sets.append(J2A.Set(prevsamplecount=prevsamplecount))
+                        else:
+                            J2A._seek(j2afile, offset)
+                            s, crc = J2A.Set.read(j2afile, crc)
+                            if prevsamplecount != s.header["priorsamplecount"]:
+                                ps_miscounts += 1
+                            prevsamplecount = s.header["samplecount"] + s.header["priorsamplecount"]
+                            self.sets.append(s)
+                    if ps_miscounts:
+                        print("Warning: %d miscounts detected for samples (this is expected for the shareware demo)" % ps_miscounts)
                     if crc & 0xffffffff != self.header["crc32"]:
                         print("Warning: CRC32 mismatch in J2A file %s. Ignoring..." % self.filename, file=sys.stderr)
                     raw = j2afile.read()
                     if raw:
-                        print("Warning: extra %i bytes found at the end of J2A file %s. Ignoring..." % (len(raw), self.filename), file=sys.stderr)
+                        print("Warning: extra %d bytes found at the end of J2A file %s. Ignoring..." % (len(raw), self.filename), file=sys.stderr)
                 except (AssertionError, struct.error):
-                    raise J2A.J2AParseError("Error: file %s is not a valid J2A file" % self.filename)
+                    raise J2A.J2AParseError("File %s is not a valid J2A file" % self.filename)
 
         return self.header
 
-    def load_set(self, setnum):
-        if not self.header:
-            self.read()
-
-        if -1 < setnum < self.header["setcount"]:
-            self.currentset = setnum
-        else:
-            print("set %s doesn't exist!" % setnum, file=sys.stderr)
-            sys.exit(1)
-
     def get_palette(self, given = None):
         if not self.palette:
-            palfile = open("Diamondus_2.pal").readlines() if not given else given
+            palfile = open(self._defaultpalette).readlines() if not given else given
             pal = list()
             for i in range(3, 259):
                 color = palfile[i].rstrip("\n").split(' ')
@@ -173,21 +195,23 @@ class J2A:
         if not self.header:
             self.read()
 
-        self.load_set(set_num)
-        data = self.setdata[set_num]
-        animinfo = self.get_substream(1)
-        frameinfo = self.get_substream(2)
+        s = self.sets[set_num]
+        if anim_num >= s.header["animcount"]:
+            raise KeyError("Animation number %d is out of bounds for set %d (must be between 0 and %d)"
+                % (anim_num, set_num, s.header["animcount"]-1))
+        animinfo = s.get_substream(1)
+        frameinfo = s.get_substream(2)
         frameoffset = frame_num
         for i in range(0, anim_num):
             try:
                 info = misc.named_unpack(self._animinfostruct, animinfo[i*8:(i*8)+8])
             except:
-                print("couldnt load frame at coordinates %s" % repr((set_num, anim_num, frame_num)))
+                print("couldn't load frame at coordinates %s" % repr((set_num, anim_num, frame_num)))
                 return
             frameoffset += info["framecount"]
         info = misc.named_unpack(self._frameinfostruct, frameinfo[frameoffset*24:(frameoffset*24)+24])
         dataoffset = info["imageoffset"]
-        imagedata = self.get_substream(3)
+        imagedata = s.get_substream(3)
 
         pixelmap = self.make_pixelmap(imagedata[dataoffset:])
         return [info, self.render_pixelmap(pixelmap)]

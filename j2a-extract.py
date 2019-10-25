@@ -18,19 +18,17 @@ def main():
         # but leaves the order of animations intact, causing gaping holes with offsets of zero in the .j2a file
         if j2a.setoffsets[setnum] == 0:
             continue
-        j2a.load_set(setnum)
-        thissetinfo = j2a.setdata[setnum]
-        animinfo = j2a.get_substream(1)
-        frameinfo = j2a.get_substream(2)
-        imagedata = j2a.get_substream(3)
+        s = j2a.sets[setnum]
+        animinfo = s.get_substream(1)
+        frameinfo = s.get_substream(2)
+        imagedata = s.get_substream(3)
 #         print("# set {:3}: ulengths {:3} {:5} {:8}".format(
 #             setnum, *map(len, (animinfo, frameinfo, imagedata))
 #         ))
-        animnum = -1
         setdir = os.path.join(outputdir, str(setnum))
         if not os.path.exists(setdir):
              os.makedirs(setdir)
-        for animnum in range(thissetinfo["animcount"]):
+        for animnum in range(s.header["animcount"]):
             thisaniminfo = misc.named_unpack(j2a._animinfostruct, animinfo[:8])
             animinfo = animinfo[8:]
             dirname = os.path.join(setdir, str(animnum))

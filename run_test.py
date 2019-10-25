@@ -19,7 +19,8 @@ def show_frame(set_num, anim_num, frame_num):
 
     anims = J2A(anims_path)
     frame = anims.get_frame(set_num, anim_num, frame_num)
-    show_img(frame[1])
+    if frame:
+        show_img(frame[1])
 
 def _read_hdr():
     global anims_path
@@ -30,37 +31,13 @@ def _read_hdr():
 def print_j2a_stats():
     anims = _read_hdr()
     print("Jazz Jackrabbit 2 animations file")
-    for k in ("signature", "magic", "headersize", "version", "unknown", "filesize", "crc32", "setcount"):
+    for k in ("magic", "headersize", "version", "unknown", "filesize", "crc32", "setcount"):
         print("\t{}: {}".format(k, anims.header[k]))
-    for i,setinfo in enumerate(anims.setdata):
+    for i,s in enumerate(anims.sets):
         print("\tSet {}:".format(i))
-        for k in ("signature", "animcount", "samplecount", "framecount", "priorsamplecount", "c1", "u1", "c2", "u2", "c3", "u3", "c4", "u4"):
+        setinfo = s.header
+        for k in ("animcount", "samplecount", "framecount", "priorsamplecount", "c1", "u1", "c2", "u2", "c3", "u3", "c4", "u4"):
             print("\t\t{}: {}".format(k, setinfo[k]))
-
-
-def print_setoffsets(filename):
-    anims = _read_hdr()
-    with open(filename, "w") as f:
-        print(*anims.setoffsets, sep='\n', file=f)
-#         print(
-#             *sorted(anims.setdata, key=lambda x : (x["samplecount"], x["animcount"], x["framecount"])),
-#             sep='\n', file=f
-#         )
-
-def print_setdata(filename):
-    anims = _read_hdr()
-    with open(filename, "w") as f:
-        print(*(sorted(elt.items()) for elt in anims.setdata), sep='\n', file=f)
-#         print(
-#             *sorted(anims.setdata, key=lambda x : (x["samplecount"], x["animcount"], x["framecount"])),
-#             sep='\n', file=f
-#         )
-
-def dump_setdata(setnum, filename):
-    anims = _read_hdr()
-    anims.load_set(setnum)
-    with open(filename, "wb") as f:
-        f.write(anims.get_substream(3))
 
 def stress_test(initial_set_num = 0):
     import misc
@@ -70,12 +47,11 @@ def stress_test(initial_set_num = 0):
         # but leaves the order of animations intact, causing gaping holes with offsets of zero in the .j2a file
         if anims.setoffsets[setnum] == 0:
             continue
-        anims.load_set(setnum)
-        thissetinfo = anims.setdata[setnum]
-        animinfo = anims.get_substream(1)
-        frameinfo = anims.get_substream(2)
-        imagedata = anims.get_substream(3)
-        for animnum in range(thissetinfo["animcount"]):
+        s = anims.sets[setnum]
+        animinfo = s.get_substream(1)
+        frameinfo = s.get_substream(2)
+        imagedata = s.get_substream(3)
+        for animnum in range(s.header["animcount"]):
             thisaniminfo = misc.named_unpack(anims._animinfostruct, animinfo[:8])
             animinfo = animinfo[8:]
             for framenum in range(thisaniminfo["framecount"]):
