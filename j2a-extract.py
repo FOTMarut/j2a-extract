@@ -11,8 +11,7 @@ if sys.version_info[0] <= 2:
 def main():
     animsfilename = sys.argv[1] if (len(sys.argv) >= 2) else \
         input("Please type the animsfilename of the .j2a file you wish to extract:\n")
-    j2a = J2A(animsfilename)
-    j2a.read()
+    j2a = J2A(animsfilename).read()
     outputdir = os.path.join(os.path.dirname(animsfilename), os.path.basename(animsfilename).replace('.', '-'))
     for setnum in range(j2a.header["setcount"]):
         s = j2a.sets[setnum]

@@ -22,11 +22,50 @@ def show_frame(set_num, anim_num, frame_num):
     if frame:
         show_img(frame[1])
 
+def show_anim(set_num, anim_num):
+    import numpy as np
+    import matplotlib.pyplot as plt
+    from matplotlib.animation import ArtistAnimation
+    import misc
+
+    anims = _read_hdr()
+    s = anims.sets[set_num]
+    if anim_num >= s.header["animcount"]:
+        raise KeyError("Animation number %d is out of bounds for set %d (must be between 0 and %d)"
+            % (anim_num, set_num, s.header["animcount"]-1))
+    animinfo = s.get_substream(1)
+    frameinfo = s.get_substream(2)
+    frameoffset = 0
+    for i in range(0, anim_num):
+        ainfo = misc.named_unpack(J2A._animinfostruct, animinfo[i*8:(i*8)+8])
+        frameoffset += ainfo["framecount"]
+    ainfo = misc.named_unpack(J2A._animinfostruct, animinfo[anim_num*8:(anim_num*8)+8])
+    framecount, fps = ainfo["framecount"], ainfo["fps"]
+    frameoffset *= 24
+    frameinfo_l = [
+        misc.named_unpack(J2A._frameinfostruct, frameinfo[frameoffset:frameoffset+24])
+        for frameoffset in range(frameoffset, frameoffset + 24*framecount, 24)
+    ]
+    imageoffsets = [finfo["imageoffset"] for finfo in frameinfo_l]
+    imagedata = s.get_substream(3)
+    images = [anims.render_pixelmap(anims.make_pixelmap(imagedata[offset:])) for offset in imageoffsets]
+
+    borders = np.array([[finfo["hotspotx"], finfo["width"], finfo["hotspoty"], finfo["height"]] for finfo in frameinfo_l])
+    borders[:,1] += borders[:,0]
+    borders[:,3] += borders[:,2]
+    extremes = ((borders[:,0].min(), borders[:,1].max()), (borders[:,2].min(), borders[:,3].max()))
+
+    fig, ax = plt.subplots()
+    artists = [[plt.imshow(image, animated=True, extent=borders[i])] for i,image in enumerate(images)]
+    ani = ArtistAnimation(fig, artists, interval=1000.0/fps, blit=True)
+    ax.axis("off")
+    ax.set_xlim(extremes[0])
+    ax.set_ylim(extremes[1])
+    plt.show()
+
 def _read_hdr():
     global anims_path
-    anims = J2A(anims_path)
-    anims.read()
-    return anims
+    return J2A(anims_path).read()
 
 def print_j2a_stats():
     anims = _read_hdr()

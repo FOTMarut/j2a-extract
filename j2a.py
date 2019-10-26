@@ -128,7 +128,7 @@ class J2A:
                 except (AssertionError, struct.error):
                     raise J2A.J2AParseError("File %s is not a valid J2A file" % self.filename)
 
-        return self.header
+        return self
 
     def get_palette(self, given = None):
         if not self.palette:
