@@ -26,6 +26,8 @@ class J2A:
     _animinfostruct = "H|framecount/H|fps/l|reserved"
     _frameinfostruct = "H|width/H|height/h|coldspotx/h|coldspoty/h|hotspotx/h|hotspoty/h|gunspotx/h|gunspoty/L|imageoffset/L|maskoffset"
     _ALIBheadersize = 28
+    _animinfosize = 8
+    _frameinfosize = 24
     _defaultpalette = "Diamondus_2.pal"
 
     class J2AParseError(Exception):
@@ -37,7 +39,7 @@ class J2A:
 
         def __init__(self, *pargs, **kwargs):
             if pargs:
-                self.header, self.chunks = pargs
+                self.header, self._chunks = pargs
             else:
                 self.header = {(a+b):0 for a in "cu" for b in "1234"}
                 self.header.update(
@@ -46,7 +48,8 @@ class J2A:
                     framecount=0,
                     priorsamplecount=kwargs["prevsamplecount"]
                 )
-                self.chunks = [zlib.compress(b'')] * 4
+                self._chunks = [zlib.compress(b'')] * 4
+            self._packed = True
 
         @staticmethod
         def read(f, crc):
@@ -63,12 +66,67 @@ class J2A:
                 crc = zlib.crc32(chunk, crc)
             return (J2A.Set(setheader, chunks), crc)
 
+        def unpack(self):
+            if self._packed:
+                animinfo, frameinfo, imagedata, self._sampledata = (zlib.decompress(c) for c in self._chunks)
+                animinfo = [misc.named_unpack(J2A._animinfostruct, animinfo[ofs:ofs+J2A._animinfosize])
+                    for ofs in range(0, len(animinfo), J2A._animinfosize)]
+                frameinfo = [misc.named_unpack(J2A._frameinfostruct, frameinfo[ofs:ofs+J2A._frameinfosize])
+                    for ofs in range(0, len(frameinfo), J2A._frameinfosize)]
+                assert(len(animinfo)  == self.header["animcount"])
+                assert(len(frameinfo) == self.header["framecount"])
+                self._anims = []
+                for anim in animinfo:
+                    framecount = anim["framecount"]
+                    self._anims.append(J2A.Animation.read(anim, frameinfo[:framecount], imagedata))
+                    frameinfo = frameinfo[framecount:]
+            self._packed = False
+            return self
+
+        def pack(self):
+            raise NotImplementedError #TODO
+
+        @property
+        def animations(self):
+            if self._packed:
+                self.unpack()
+            return self._anims
+
+        @property
+        def samples(self):
+            raise NotImplementedError #TODO
+
         def get_substream(self, streamnum):
-            return zlib.decompress(self.chunks[streamnum-1])
+            return zlib.decompress(self._chunks[streamnum-1])
+
+
+    class Animation:
+        def __init__(self, frames, fps):
+            self.frames = frames
+            self.fps = fps
+
+        @staticmethod
+        def read(animinfo, frameinfo_l, imagedata):
+            return J2A.Animation(
+                [J2A.Frame.read(frameinfo, imagedata) for frameinfo in frameinfo_l],
+                animinfo["fps"]
+            )
+
+
+    class Frame:
+        def __init__(self, frameinfo, imagedata):
+            self.header = frameinfo
+            self.data = imagedata
+
+        @staticmethod
+        def read(frameinfo, imagedata):
+            return J2A.Frame(frameinfo, imagedata)
+
 
     def __init__(self, filename):
         ''' initializes class, sets file name '''
         self.header = self.palette = None
+        self.sets = []
         self.set_filename(filename)
 
     def set_filename(self, filename):
@@ -86,47 +144,45 @@ class J2A:
 
     def read(self):
         ''' reads whole J2A file, parses ALIB and ANIM headers and collects all sets '''
-        if not self.header:
-            with open(self.filename, "rb") as j2afile:
-                # TODO: maybe add a separate check for ALIB version?
-                # TODO: check for previous sample count consistency
-                try:
-                    self.header = misc.named_unpack(self._headerstruct, j2afile.read(self._ALIBheadersize))
-                    setcount = self.header["setcount"]
-                    assert(
-                        (self.header["signature"], self.header["magic"], self.header["headersize"], self.header["version"]) ==
-                        (b'ALIB', 0x00BEBA00, self._ALIBheadersize + 4*setcount, 0x0200)
-                    )
-                    if self.header["unknown"] != 0x1808:
-                        print("Warning: minor difference found in ALIB header. Ignoring...", file=sys.stderr)
-                    self.header.pop("signature")
-                    raw = j2afile.read(4*setcount)
-                    setoffsets = struct.unpack('<%iL' % setcount, raw)
-                    crc = zlib.crc32(raw)
-                    assert(setoffsets[0] == self.header["headersize"])
-                    prevsamplecount = ps_miscounts = 0
-                    self.sets = []
-                    for offset in setoffsets:
-                        # The shareware demo removes some of the animsets to save on filesize, but leaves the
-                        # order of animations intact, causing gaping holes with offsets of zero in the .j2a file
-                        if offset == 0:
-                            self.sets.append(J2A.Set(prevsamplecount=prevsamplecount))
-                        else:
-                            J2A._seek(j2afile, offset)
-                            s, crc = J2A.Set.read(j2afile, crc)
-                            if prevsamplecount != s.header["priorsamplecount"]:
-                                ps_miscounts += 1
-                            prevsamplecount = s.header["samplecount"] + s.header["priorsamplecount"]
-                            self.sets.append(s)
-                    if ps_miscounts:
-                        print("Warning: %d sample miscounts detected (this is expected for the shareware demo)" % ps_miscounts)
-                    if crc & 0xffffffff != self.header["crc32"]:
-                        print("Warning: CRC32 mismatch in J2A file %s. Ignoring..." % self.filename, file=sys.stderr)
-                    raw = j2afile.read()
-                    if raw:
-                        print("Warning: extra %d bytes found at the end of J2A file %s. Ignoring..." % (len(raw), self.filename), file=sys.stderr)
-                except (AssertionError, struct.error):
-                    raise J2A.J2AParseError("File %s is not a valid J2A file" % self.filename)
+        with open(self.filename, "rb") as j2afile:
+            # TODO: maybe add a separate check for ALIB version?
+            try:
+                self.header = misc.named_unpack(self._headerstruct, j2afile.read(self._ALIBheadersize))
+                setcount = self.header["setcount"]
+                assert(
+                    (self.header["signature"], self.header["magic"], self.header["headersize"], self.header["version"]) ==
+                    (b'ALIB', 0x00BEBA00, self._ALIBheadersize + 4*setcount, 0x0200)
+                )
+                if self.header["unknown"] != 0x1808:
+                    print("Warning: minor difference found in ALIB header. Ignoring...", file=sys.stderr)
+                self.header.pop("signature")
+                raw = j2afile.read(4*setcount)
+                setoffsets = struct.unpack('<%iL' % setcount, raw)
+                crc = zlib.crc32(raw)
+                assert(setoffsets[0] == self.header["headersize"])
+                prevsamplecount = ps_miscounts = 0
+                self.sets = []
+                for offset in setoffsets:
+                    # The shareware demo removes some of the animsets to save on filesize, but leaves the
+                    # order of animations intact, causing gaping holes with offsets of zero in the .j2a file
+                    if offset == 0:
+                        self.sets.append(J2A.Set(prevsamplecount=prevsamplecount))
+                    else:
+                        J2A._seek(j2afile, offset)
+                        s, crc = J2A.Set.read(j2afile, crc)
+                        if prevsamplecount != s.header["priorsamplecount"]:
+                            ps_miscounts += 1
+                        prevsamplecount = s.header["samplecount"] + s.header["priorsamplecount"]
+                        self.sets.append(s)
+                if ps_miscounts:
+                    print("Warning: %d sample miscounts detected (this is expected for the shareware demo)" % ps_miscounts)
+                if crc & 0xffffffff != self.header["crc32"]:
+                    print("Warning: CRC32 mismatch in J2A file %s. Ignoring..." % self.filename, file=sys.stderr)
+                raw = j2afile.read()
+                if raw:
+                    print("Warning: extra %d bytes found at the end of J2A file %s. Ignoring..." % (len(raw), self.filename), file=sys.stderr)
+            except (AssertionError, struct.error):
+                raise J2A.J2AParseError("File %s is not a valid J2A file" % self.filename)
 
         return self
 
@@ -142,7 +198,8 @@ class J2A:
 
         return self.palette
 
-    def make_pixelmap(self, raw):
+    @staticmethod
+    def make_pixelmap(raw):
         width, height = struct.unpack_from("<HH", raw)
         width &= 0x7FFF #unset msb
         raw = raw[4:]
@@ -194,28 +251,13 @@ class J2A:
 
     def get_frame(self, set_num, anim_num, frame_num):
         ''' gets image info and image corresponding to a specific set, animation and frame number '''
-        if not self.header:
-            self.read()
-
         s = self.sets[set_num]
-        if anim_num >= s.header["animcount"]:
-            raise KeyError("Animation number %d is out of bounds for set %d (must be between 0 and %d)"
-                % (anim_num, set_num, s.header["animcount"]-1))
-        animinfo = s.get_substream(1)
-        frameinfo = s.get_substream(2)
-        frameoffset = frame_num
-        for i in range(0, anim_num):
-            try:
-                info = misc.named_unpack(self._animinfostruct, animinfo[i*8:(i*8)+8])
-            except:
-                print("couldn't load frame at coordinates %s" % repr((set_num, anim_num, frame_num)))
-                return
-            frameoffset += info["framecount"]
-        info = misc.named_unpack(self._frameinfostruct, frameinfo[frameoffset*24:(frameoffset*24)+24])
-        dataoffset = info["imageoffset"]
-        imagedata = s.get_substream(3)
+        anim = s.animations[anim_num]
+        frame = anim.frames[frame_num]
 
-        pixelmap = self.make_pixelmap(imagedata[dataoffset:])
+        info = frame.header
+        raw = frame.data[info["imageoffset"]:]
+        pixelmap = self.make_pixelmap(raw)
         return [info, self.render_pixelmap(pixelmap)]
 
     def render_frame(self, *coordinates):

@@ -6,7 +6,6 @@ import sys
 from types import FunctionType
 
 def show_frame(set_num, anim_num, frame_num):
-    global anims_path
     try:
         import matplotlib.pyplot as plt
         def show_img(img):
@@ -17,7 +16,7 @@ def show_frame(set_num, anim_num, frame_num):
         def show_img(img):
             img.show()
 
-    anims = J2A(anims_path)
+    anims = _read_hdr()
     frame = anims.get_frame(set_num, anim_num, frame_num)
     if frame:
         show_img(frame[1])
@@ -26,29 +25,18 @@ def show_anim(set_num, anim_num):
     import numpy as np
     import matplotlib.pyplot as plt
     from matplotlib.animation import ArtistAnimation
-    import misc
 
     anims = _read_hdr()
     s = anims.sets[set_num]
-    if anim_num >= s.header["animcount"]:
-        raise KeyError("Animation number %d is out of bounds for set %d (must be between 0 and %d)"
-            % (anim_num, set_num, s.header["animcount"]-1))
-    animinfo = s.get_substream(1)
-    frameinfo = s.get_substream(2)
-    frameoffset = 0
-    for i in range(0, anim_num):
-        ainfo = misc.named_unpack(J2A._animinfostruct, animinfo[i*8:(i*8)+8])
-        frameoffset += ainfo["framecount"]
-    ainfo = misc.named_unpack(J2A._animinfostruct, animinfo[anim_num*8:(anim_num*8)+8])
-    framecount, fps = ainfo["framecount"], ainfo["fps"]
-    frameoffset *= 24
-    frameinfo_l = [
-        misc.named_unpack(J2A._frameinfostruct, frameinfo[frameoffset:frameoffset+24])
-        for frameoffset in range(frameoffset, frameoffset + 24*framecount, 24)
-    ]
+    anim = s.animations[anim_num]
+
+    frameinfo_l = [frame.header for frame in anim.frames]
     imageoffsets = [finfo["imageoffset"] for finfo in frameinfo_l]
-    imagedata = s.get_substream(3)
-    images = [anims.render_pixelmap(anims.make_pixelmap(imagedata[offset:])) for offset in imageoffsets]
+    images = [
+        anims.render_pixelmap(anims.make_pixelmap(frame.data[frame.header["imageoffset"]:]))
+        for frame in anim.frames
+    ]
+    fps = anim.fps
 
     borders = np.array([[finfo["hotspotx"], finfo["width"], finfo["hotspoty"], finfo["height"]] for finfo in frameinfo_l])
     borders[:,1] += borders[:,0]
@@ -81,21 +69,26 @@ def print_j2a_stats():
 def stress_test(initial_set_num = 0):
     import misc
     anims = _read_hdr()
-    for setnum in range(initial_set_num, anims.header["setcount"]):
-        s = anims.sets[setnum]
-        animinfo = s.get_substream(1)
-        frameinfo = s.get_substream(2)
-        imagedata = s.get_substream(3)
-        for animnum in range(s.header["animcount"]):
-            thisaniminfo = misc.named_unpack(anims._animinfostruct, animinfo[:8])
-            animinfo = animinfo[8:]
-            for framenum in range(thisaniminfo["framecount"]):
-                thisframeinfo = misc.named_unpack(anims._frameinfostruct, frameinfo[:24])
-                frameinfo = frameinfo[24:]
-                raw = imagedata[thisframeinfo["imageoffset"]:]
-#                 if (struct.unpack_from("<H", raw)[0] >= 32768):
-#                 print("Set {}, anim {}, frame {}".format(setnum, animnum, framenum))
+    for s in anims.sets:
+        for anim in s.animations:
+            for frame in anim.frames:
+                frameinfo = frame.header
+                raw = frame.data[frameinfo["imageoffset"]:]
                 anims.make_pixelmap(raw)
+
+def profile_stress_test(arg):
+    if arg[-1] == "x":
+        for i in range(int(arg[:-1])):
+            stress_test()
+    elif arg[-1] == "s":
+        from time import time
+        seconds = float(arg[:-1])
+        curtime = startingtime = time()
+        while curtime - startingtime <= seconds:
+            stress_test()
+            curtime = time()
+    else:
+        raise KeyError
 
 #############################################################################################################
 
