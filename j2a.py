@@ -46,7 +46,7 @@ class J2A:
                     framecount=0,
                     priorsamplecount=kwargs["prevsamplecount"]
                 )
-                self.chunks = [bytes() for _ in range(4)] # TODO: fixme; these are not valid compressed streams
+                self.chunks = [zlib.compress(b'')] * 4
 
         @staticmethod
         def read(f, crc):
@@ -107,6 +107,8 @@ class J2A:
                     prevsamplecount = ps_miscounts = 0
                     self.sets = []
                     for offset in setoffsets:
+                        # The shareware demo removes some of the animsets to save on filesize, but leaves the
+                        # order of animations intact, causing gaping holes with offsets of zero in the .j2a file
                         if offset == 0:
                             self.sets.append(J2A.Set(prevsamplecount=prevsamplecount))
                         else:
@@ -117,7 +119,7 @@ class J2A:
                             prevsamplecount = s.header["samplecount"] + s.header["priorsamplecount"]
                             self.sets.append(s)
                     if ps_miscounts:
-                        print("Warning: %d miscounts detected for samples (this is expected for the shareware demo)" % ps_miscounts)
+                        print("Warning: %d sample miscounts detected (this is expected for the shareware demo)" % ps_miscounts)
                     if crc & 0xffffffff != self.header["crc32"]:
                         print("Warning: CRC32 mismatch in J2A file %s. Ignoring..." % self.filename, file=sys.stderr)
                     raw = j2afile.read()

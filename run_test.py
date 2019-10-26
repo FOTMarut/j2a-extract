@@ -43,10 +43,6 @@ def stress_test(initial_set_num = 0):
     import misc
     anims = _read_hdr()
     for setnum in range(initial_set_num, anims.header["setcount"]):
-        # The shareware demo (or at least the TSF one) removes some of the animsets to save on filesize,
-        # but leaves the order of animations intact, causing gaping holes with offsets of zero in the .j2a file
-        if anims.setoffsets[setnum] == 0:
-            continue
         s = anims.sets[setnum]
         animinfo = s.get_substream(1)
         frameinfo = s.get_substream(2)

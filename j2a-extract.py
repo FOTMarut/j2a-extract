@@ -1,4 +1,5 @@
 from __future__ import print_function
+import os
 import sys
 import struct
 import misc
@@ -14,10 +15,6 @@ def main():
     j2a.read()
     outputdir = os.path.join(os.path.dirname(animsfilename), os.path.basename(animsfilename).replace('.', '-'))
     for setnum in range(j2a.header["setcount"]):
-        # The shareware demo (or at least the TSF one) removes some of the animsets to save on filesize,
-        # but leaves the order of animations intact, causing gaping holes with offsets of zero in the .j2a file
-        if j2a.setoffsets[setnum] == 0:
-            continue
         s = j2a.sets[setnum]
         animinfo = s.get_substream(1)
         frameinfo = s.get_substream(2)
