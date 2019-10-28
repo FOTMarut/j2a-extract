@@ -10,6 +10,18 @@ class NamedStruct(struct.Struct):
         self._names = tuple(p[1] for p in pairs)
         super(NamedStruct, self).__init__("<" + "".join(p[0] for p in pairs))
 
+    def pack(self, **kwargs):
+        l = [None] * len(kwargs)
+        for k,v in kwargs.items():
+            l[self._names.index(k)] = v
+        return super(NamedStruct, self).pack(*l)
+
+    def pack_into(self, buffer, offset, **kwargs):
+        l = [None] * len(kwargs)
+        for k,v in kwargs.items():
+            l[self._names.index(k)] = v
+        return super(NamedStruct, self).pack_into(buffer, offset, *l)
+
     def unpack(self, *pargs, **kwargs):
         up = super(NamedStruct, self).unpack(*pargs, **kwargs)
         return {k: v for k,v in zip(self._names, up)}
@@ -17,8 +29,15 @@ class NamedStruct(struct.Struct):
     def unpack_from(self, *pargs, **kwargs):
         up = super(NamedStruct, self).unpack_from(*pargs, **kwargs)
         return {k: v for k,v in zip(self._names, up)}
+
+    def iter_unpack(self, buffer, *pargs, **kwargs):
+        offset = 0
+        length = len(buffer)
+        while offset < length:
+            yield self.unpack_from(buffer, offset, *pargs, **kwargs)
+            offset += self.size
+
 # TODO: replace dict comprehensions with dict() constructor, if possible
-# TODO: complete this API
 
 #--- Obsoleted ---
 # def named_unpack(format, string):

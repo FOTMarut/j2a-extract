@@ -57,14 +57,11 @@ class J2A:
             return (J2A.Set(setheader, chunks), crc, setheader["priorsamplecount"])
 
         def unpack(self):
-            # TODO: preserve samples
             if self._chunks:
                 animinfo, frameinfo, imagedata, self._sampledata = \
                     (zlib.decompress(c, zlib.MAX_WBITS, usize) for c,usize in self._chunks)
-                animinfo = [ J2A.Animation._Header.unpack_from(animinfo, ofs)
-                             for ofs in range(0, len(animinfo), J2A.Animation._Header.size) ]
-                frameinfo = [ J2A.Frame._Header.unpack_from(frameinfo, ofs)
-                              for ofs in range(0, len(frameinfo), J2A.Frame._Header.size) ]
+                animinfo  = list(J2A.Animation._Header.iter_unpack(animinfo))
+                frameinfo = list(J2A.Frame._Header.iter_unpack(frameinfo))
                 imagedata = array.array("B", imagedata)
                 self._anims = []
                 for anim in animinfo:
