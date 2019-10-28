@@ -17,6 +17,7 @@ class NamedStruct(struct.Struct):
     def unpack_from(self, *pargs, **kwargs):
         up = super(NamedStruct, self).unpack_from(*pargs, **kwargs)
         return {k: v for k,v in zip(self._names, up)}
+# TODO: replace dict comprehensions with dict() constructor, if possible
 # TODO: complete this API
 
 #--- Obsoleted ---

@@ -57,49 +57,60 @@ def _read_hdr():
 def print_j2a_stats():
     anims = _read_hdr()
     print("Jazz Jackrabbit 2 animations file")
-    for k in ("magic", "headersize", "version", "unknown", "filesize", "crc32", "setcount"):
-        print("\t{}: {}".format(k, anims.header[k]))
+    print("\tsetcount: {}".format(len(anims.sets)))
     for i,s in enumerate(anims.sets):
         print("\tSet {}:".format(i))
-        setinfo = s.header
-        for k in ("animcount", "samplecount", "framecount", "priorsamplecount", "c1", "u1", "c2", "u2", "c3", "u3", "c4", "u4"):
-            print("\t\t{}: {}".format(k, setinfo[k]))
+        print("\t\tanimcount: {}".format(len(s.animations)))
+        print("\t\tsamplecount: {}".format(s._samplecount))
+        print("\t\tframecount: {}".format(sum(len(a.frames) for a in s.animations)))
 
-def stress_test(initial_set_num = 0):
-    import misc
+def stress_test():
     anims = _read_hdr()
     for s in anims.sets:
         for anim in s.animations:
             for frame in anim.frames:
                 anims.make_pixelmap(frame.data, frame.header["imageoffset"])
 
-def profile_stress_test(arg):
+def unpacking_test():
+    anims = _read_hdr()
+    anims.unpack()
+
+def profile_func(funcname, arg, *pargs):
     '''
-    Run stress_test() repeatedly until condition specified by `arg` is satisfied.
+    Call function repeatedly according to the condition specified by `arg`.
+    `funcname` specifies the name of the function in the global namespace to call.
     `arg` must be a string of one of the following types:
      - "#x", where # is an integer; this calls the function # times
-     - "#s", where # is an integer; this calls the function until # seconds are elapsed
+     - "#s", where # is an integer; this calls the function for at least # seconds
+    The function is called with `*pargs` positional arguments.
     This function is useful for profiling from the command line with a command such as:
     > python -m cProfile run_test.py profile_stress_test <arg>
     Optionally you can add `-o <file>` after "cProfile" to save the results to a file.
+    Afterwards, to view it use:
+    > python -m pstats <file>
     '''
     from time import time
+    import itertools
+    global fmap
+    f = fmap[funcname]
     startingtime = time()
     if arg[-1] == "x":
-        for i in range(1, int(arg[:-1])+1):
-            stress_test()
-        curtime = time()
+        arg = int(arg[:-1])
+        condition = lambda i,t : i < arg
     elif arg[-1] == "s":
-        i = 0
-        seconds = float(arg[:-1])
-        curtime = startingtime
-        while curtime - startingtime <= seconds:
-            stress_test()
-            curtime = time()
-            i += 1
+        arg = float(arg[:-1])
+        condition = lambda i,t : t <= arg
     else:
         raise KeyError
-    print("Running for {:.3} s, {} iterations".format(curtime-startingtime, i))
+
+    curtime = startingtime
+    for i in itertools.count():
+        if condition(i, curtime-startingtime):
+            f(*pargs)
+            curtime = time()
+        else:
+            print("Running for {:.3} s, {} iterations".format(curtime-startingtime, i))
+            return
 
 #############################################################################################################
 

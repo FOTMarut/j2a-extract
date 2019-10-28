@@ -35,17 +35,12 @@ class J2A:
 
         def __init__(self, *pargs, **kwargs):
             if pargs:
-                self.header, self._chunks = pargs
+                setheader, self._chunks = pargs
+                self._samplecount = setheader["samplecount"]
             else:
-                self.header = {(a+b):0 for a in "cu" for b in "1234"}
-                self.header.update(
-                    animcount=0,
-                    samplecount=0,
-                    framecount=0,
-                    priorsamplecount=kwargs["prevsamplecount"]
-                )
-                self._chunks = [(zlib.compress(b''), 0)] * 4
-            self._packed = True
+                self._anims = []
+                self._samplecount = 0
+                self._chunks = None
 
         @staticmethod
         def read(f, crc):
@@ -56,14 +51,14 @@ class J2A:
                 (setheader["signature"], setheader["u1"], setheader["u2"]) ==
                 (b'ANIM', 8*setheader["animcount"], 24*setheader["framecount"])
             )
-            setheader.pop("signature")
             chunks = [(f.read(setheader["c" + k]), setheader["u" + k]) for k in "1234"]
             for chunk in chunks:
                 crc = zlib.crc32(chunk[0], crc)
-            return (J2A.Set(setheader, chunks), crc)
+            return (J2A.Set(setheader, chunks), crc, setheader["priorsamplecount"])
 
         def unpack(self):
-            if self._packed:
+            # TODO: preserve samples
+            if self._chunks:
                 animinfo, frameinfo, imagedata, self._sampledata = \
                     (zlib.decompress(c, zlib.MAX_WBITS, usize) for c,usize in self._chunks)
                 animinfo = [ J2A.Animation._Header.unpack_from(animinfo, ofs)
@@ -71,14 +66,12 @@ class J2A:
                 frameinfo = [ J2A.Frame._Header.unpack_from(frameinfo, ofs)
                               for ofs in range(0, len(frameinfo), J2A.Frame._Header.size) ]
                 imagedata = array.array("B", imagedata)
-                assert(len(animinfo)  == self.header["animcount"])
-                assert(len(frameinfo) == self.header["framecount"])
                 self._anims = []
                 for anim in animinfo:
                     framecount = anim["framecount"]
                     self._anims.append(J2A.Animation.read(anim, frameinfo[:framecount], imagedata))
                     frameinfo = frameinfo[framecount:]
-            self._packed = False
+                self._chunks = None
             return self
 
         def pack(self):
@@ -86,7 +79,7 @@ class J2A:
 
         @property
         def animations(self):
-            if self._packed:
+            if self._chunks:
                 self.unpack()
             return self._anims
 
@@ -124,7 +117,7 @@ class J2A:
 
     def __init__(self, filename):
         ''' initializes class, sets file name '''
-        self.header = self.palette = None
+        self.palette = None
         self.sets = []
         self.set_filename(filename)
 
@@ -146,19 +139,19 @@ class J2A:
         with open(self.filename, "rb") as j2afile:
             # TODO: maybe add a separate check for ALIB version?
             try:
-                self.header = self._Header.unpack(j2afile.read(self._Header.size))
-                setcount = self.header["setcount"]
+                alibheader = self._Header.unpack(j2afile.read(self._Header.size))
+                setcount = alibheader["setcount"]
                 assert(
-                    (self.header["signature"], self.header["magic"], self.header["headersize"], self.header["version"]) ==
+                    (alibheader["signature"], alibheader["magic"], alibheader["headersize"], alibheader["version"]) ==
                     (b'ALIB', 0x00BEBA00, self._Header.size + 4*setcount, 0x0200)
                 )
-                if self.header["unknown"] != 0x1808:
+                if alibheader["unknown"] != 0x1808:
                     print("Warning: minor difference found in ALIB header. Ignoring...", file=sys.stderr)
-                self.header.pop("signature")
+                alibheader.pop("signature")
                 raw = j2afile.read(4*setcount)
                 setoffsets = struct.unpack('<%iL' % setcount, raw)
                 crc = zlib.crc32(raw)
-                assert(setoffsets[0] == self.header["headersize"])
+                assert(setoffsets[0] == alibheader["headersize"])
                 prevsamplecount = ps_miscounts = 0
                 self.sets = []
                 for offset in setoffsets:
@@ -168,14 +161,14 @@ class J2A:
                         self.sets.append(J2A.Set(prevsamplecount=prevsamplecount))
                     else:
                         J2A._seek(j2afile, offset)
-                        s, crc = J2A.Set.read(j2afile, crc)
-                        if prevsamplecount != s.header["priorsamplecount"]:
+                        s, crc, reported_psc = J2A.Set.read(j2afile, crc)
+                        if prevsamplecount != reported_psc:
                             ps_miscounts += 1
-                        prevsamplecount = s.header["samplecount"] + s.header["priorsamplecount"]
+                        prevsamplecount = s._samplecount + reported_psc
                         self.sets.append(s)
                 if ps_miscounts:
                     print("Warning: %d sample miscounts detected (this is expected for the shareware demo)" % ps_miscounts)
-                if crc & 0xffffffff != self.header["crc32"]:
+                if crc & 0xffffffff != alibheader["crc32"]:
                     print("Warning: CRC32 mismatch in J2A file %s. Ignoring..." % self.filename, file=sys.stderr)
                 raw = j2afile.read()
                 if raw:
@@ -184,6 +177,10 @@ class J2A:
                 raise J2A.J2AParseError("File %s is not a valid J2A file" % self.filename)
 
         return self
+
+    def unpack(self):
+        for s in self.sets:
+            s.unpack()
 
     def get_palette(self, given = None):
         if not self.palette:
