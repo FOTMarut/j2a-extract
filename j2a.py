@@ -22,7 +22,6 @@ def pairwise(iterable):
     next(b, None)
     return zip(a, b)
 
-# TODO: finetune zlib.decompress()
 
 class J2A:
     _Header = misc.NamedStruct("4s|signature/L|magic/L|headersize/h|version/h|unknown/L|filesize/L|crc32/L|setcount")
@@ -45,7 +44,7 @@ class J2A:
                     framecount=0,
                     priorsamplecount=kwargs["prevsamplecount"]
                 )
-                self._chunks = [zlib.compress(b'')] * 4
+                self._chunks = [(zlib.compress(b''), 0)] * 4
             self._packed = True
 
         @staticmethod
@@ -58,14 +57,15 @@ class J2A:
                 (b'ANIM', 8*setheader["animcount"], 24*setheader["framecount"])
             )
             setheader.pop("signature")
-            chunks = [f.read(setheader["c" + k]) for k in "1234"]
+            chunks = [(f.read(setheader["c" + k]), setheader["u" + k]) for k in "1234"]
             for chunk in chunks:
-                crc = zlib.crc32(chunk, crc)
+                crc = zlib.crc32(chunk[0], crc)
             return (J2A.Set(setheader, chunks), crc)
 
         def unpack(self):
             if self._packed:
-                animinfo, frameinfo, imagedata, self._sampledata = (zlib.decompress(c) for c in self._chunks)
+                animinfo, frameinfo, imagedata, self._sampledata = \
+                    (zlib.decompress(c, zlib.MAX_WBITS, usize) for c,usize in self._chunks)
                 animinfo = [ J2A.Animation._Header.unpack_from(animinfo, ofs)
                              for ofs in range(0, len(animinfo), J2A.Animation._Header.size) ]
                 frameinfo = [ J2A.Frame._Header.unpack_from(frameinfo, ofs)
