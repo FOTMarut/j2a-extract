@@ -77,18 +77,32 @@ def stress_test(initial_set_num = 0):
                 anims.make_pixelmap(raw)
 
 def profile_stress_test(arg):
+    '''
+    Run stress_test() repeatedly until condition specified by `arg` is satisfied.
+    `arg` must be a string of one of the following types:
+     - "#x", where # is an integer; this calls the function # times
+     - "#s", where # is an integer; this calls the function until # seconds are elapsed
+    This function is useful for profiling from the command line with a command such as:
+    > python -m cProfile run_test.py profile_stress_test <arg>
+    Optionally you can add `-o <file>` after "cProfile" to save the results to a file.
+    '''
+    from time import time
+    startingtime = time()
     if arg[-1] == "x":
-        for i in range(int(arg[:-1])):
+        for i in range(1, int(arg[:-1])+1):
             stress_test()
+        curtime = time()
     elif arg[-1] == "s":
-        from time import time
+        i = 0
         seconds = float(arg[:-1])
-        curtime = startingtime = time()
+        curtime = startingtime
         while curtime - startingtime <= seconds:
             stress_test()
             curtime = time()
+            i += 1
     else:
         raise KeyError
+    print("Running for {:.3} s, {} iterations".format(curtime-startingtime, i))
 
 #############################################################################################################
 

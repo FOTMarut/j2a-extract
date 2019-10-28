@@ -2,7 +2,6 @@ from __future__ import print_function
 import os
 import sys
 import struct
-import misc
 from j2a import J2A #http://www.jazz2online.com/junk/j2a.py
 
 if sys.version_info[0] <= 2:

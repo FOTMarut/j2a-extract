@@ -22,20 +22,14 @@ def pairwise(iterable):
     return zip(a, b)
 
 class J2A:
-    _headerstruct = "s4|signature/L|magic/L|headersize/h|version/h|unknown/L|filesize/L|crc32/L|setcount"
-    _animinfostruct = "H|framecount/H|fps/l|reserved"
-    _frameinfostruct = "H|width/H|height/h|coldspotx/h|coldspoty/h|hotspotx/h|hotspoty/h|gunspotx/h|gunspoty/L|imageoffset/L|maskoffset"
-    _ALIBheadersize = 28
-    _animinfosize = 8
-    _frameinfosize = 24
+    _Header = misc.NamedStruct("4s|signature/L|magic/L|headersize/h|version/h|unknown/L|filesize/L|crc32/L|setcount")
     _defaultpalette = "Diamondus_2.pal"
 
     class J2AParseError(Exception):
         pass
 
     class Set(object):
-        _animheaderstruct = "s4|signature/B|animcount/B|samplecount/h|framecount/l|priorsamplecount/l|c1/l|u1/l|c2/l|u2/l|c3/l|u3/l|c4/l|u4"
-        _ANIMheadersize = 44
+        _Header = misc.NamedStruct("4s|signature/B|animcount/B|samplecount/h|framecount/l|priorsamplecount/l|c1/l|u1/l|c2/l|u2/l|c3/l|u3/l|c4/l|u4")
 
         def __init__(self, *pargs, **kwargs):
             if pargs:
@@ -53,9 +47,9 @@ class J2A:
 
         @staticmethod
         def read(f, crc):
-            chunk = f.read(J2A.Set._ANIMheadersize)
+            chunk = f.read(J2A.Set._Header.size)
             crc = zlib.crc32(chunk, crc)
-            setheader = misc.named_unpack(J2A.Set._animheaderstruct, chunk)
+            setheader = J2A.Set._Header.unpack(chunk)
             assert(
                 (setheader["signature"], setheader["u1"], setheader["u2"]) ==
                 (b'ANIM', 8*setheader["animcount"], 24*setheader["framecount"])
@@ -69,10 +63,10 @@ class J2A:
         def unpack(self):
             if self._packed:
                 animinfo, frameinfo, imagedata, self._sampledata = (zlib.decompress(c) for c in self._chunks)
-                animinfo = [misc.named_unpack(J2A._animinfostruct, animinfo[ofs:ofs+J2A._animinfosize])
-                    for ofs in range(0, len(animinfo), J2A._animinfosize)]
-                frameinfo = [misc.named_unpack(J2A._frameinfostruct, frameinfo[ofs:ofs+J2A._frameinfosize])
-                    for ofs in range(0, len(frameinfo), J2A._frameinfosize)]
+                animinfo = [ J2A.Animation._Header.unpack_from(animinfo, ofs)
+                             for ofs in range(0, len(animinfo), J2A.Animation._Header.size) ]
+                frameinfo = [ J2A.Frame._Header.unpack_from(frameinfo, ofs)
+                              for ofs in range(0, len(frameinfo), J2A.Frame._Header.size) ]
                 assert(len(animinfo)  == self.header["animcount"])
                 assert(len(frameinfo) == self.header["framecount"])
                 self._anims = []
@@ -101,6 +95,8 @@ class J2A:
 
 
     class Animation:
+        _Header = misc.NamedStruct("H|framecount/H|fps/l|reserved")
+
         def __init__(self, frames, fps):
             self.frames = frames
             self.fps = fps
@@ -114,6 +110,8 @@ class J2A:
 
 
     class Frame:
+        _Header = misc.NamedStruct("H|width/H|height/h|coldspotx/h|coldspoty/h|hotspotx/h|hotspoty/h|gunspotx/h|gunspoty/L|imageoffset/L|maskoffset")
+
         def __init__(self, frameinfo, imagedata):
             self.header = frameinfo
             self.data = imagedata
@@ -147,11 +145,11 @@ class J2A:
         with open(self.filename, "rb") as j2afile:
             # TODO: maybe add a separate check for ALIB version?
             try:
-                self.header = misc.named_unpack(self._headerstruct, j2afile.read(self._ALIBheadersize))
+                self.header = self._Header.unpack(j2afile.read(self._Header.size))
                 setcount = self.header["setcount"]
                 assert(
                     (self.header["signature"], self.header["magic"], self.header["headersize"], self.header["version"]) ==
-                    (b'ALIB', 0x00BEBA00, self._ALIBheadersize + 4*setcount, 0x0200)
+                    (b'ALIB', 0x00BEBA00, self._Header.size + 4*setcount, 0x0200)
                 )
                 if self.header["unknown"] != 0x1808:
                     print("Warning: minor difference found in ALIB header. Ignoring...", file=sys.stderr)
