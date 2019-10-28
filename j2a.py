@@ -9,6 +9,7 @@ import struct
 import os
 import sys
 import zlib
+import array
 #needs python image library, http://www.pythonware.com/library/pil/
 from PIL import Image, ImageDraw
 
@@ -20,6 +21,8 @@ def pairwise(iterable):
     a, b = itertools.tee(iterable)
     next(b, None)
     return zip(a, b)
+
+# TODO: finetune zlib.decompress()
 
 class J2A:
     _Header = misc.NamedStruct("4s|signature/L|magic/L|headersize/h|version/h|unknown/L|filesize/L|crc32/L|setcount")
@@ -67,6 +70,7 @@ class J2A:
                              for ofs in range(0, len(animinfo), J2A.Animation._Header.size) ]
                 frameinfo = [ J2A.Frame._Header.unpack_from(frameinfo, ofs)
                               for ofs in range(0, len(frameinfo), J2A.Frame._Header.size) ]
+                imagedata = array.array("B", imagedata)
                 assert(len(animinfo)  == self.header["animcount"])
                 assert(len(frameinfo) == self.header["framecount"])
                 self._anims = []
@@ -89,9 +93,6 @@ class J2A:
         @property
         def samples(self):
             raise NotImplementedError #TODO
-
-        def get_substream(self, streamnum):
-            return zlib.decompress(self._chunks[streamnum-1])
 
 
     class Animation:
@@ -197,23 +198,22 @@ class J2A:
         return self.palette
 
     @staticmethod
-    def make_pixelmap(raw):
-        width, height = struct.unpack_from("<HH", raw)
+    def make_pixelmap(raw, offset=0):
+        width, height = struct.unpack_from("<HH", raw, offset)
         width &= 0x7FFF #unset msb
-        raw = raw[4:]
         #prepare pixmap
         pixmap = [[0]*width for _ in range(height)]
         #fill it with data! (image format parser)
         length = len(raw)
-        x = y = i = 0
+        x = y = 0
+        i = offset + 4
         # This loop fails silently if decoding would cause OOB exceptions
         while i < length:
-            byte = struct.unpack_from("<B", raw, i)[0]
-#             print("Byte: {:3}, {}".format(byte, ('<' if byte < 128 else '=' if byte == 128 else '>'))) # TODO: delme
+            byte = raw[i]
             if byte > 128:
                 byte -= 128
                 l = min(byte, width - x)
-                pixmap[y][x:x+l] = struct.unpack_from("<%iB" % l, raw, i+1)
+                pixmap[y][x:x+l] = raw[i+1:i+1+l]
                 x += byte
                 i += byte
             elif byte < 128:
@@ -253,10 +253,8 @@ class J2A:
         anim = s.animations[anim_num]
         frame = anim.frames[frame_num]
 
-        info = frame.header
-        raw = frame.data[info["imageoffset"]:]
-        pixelmap = self.make_pixelmap(raw)
-        return [info, self.render_pixelmap(pixelmap)]
+        pixelmap = self.make_pixelmap(frame.data, frame.header["imageoffset"])
+        return [frame.header, self.render_pixelmap(pixelmap)]
 
     def render_frame(self, *coordinates):
         self.get_frame(*coordinates)[1].save("preview.png", "PNG")

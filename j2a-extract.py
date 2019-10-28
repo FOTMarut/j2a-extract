@@ -25,9 +25,9 @@ def main():
             open(fps_filename, "a").close() # Touch fps file, leave it empty
             for framenum,frame in enumerate(anim.frames):
                 thisframeinfo = frame.header
-                raw = frame.data[thisframeinfo["imageoffset"]:]
+                imageoffset = thisframeinfo["imageoffset"]
                 frameid = str(framenum)
-                if (struct.unpack_from("<H", raw)[0] >= 32768):
+                if (struct.unpack_from("<H", frame.data, imageoffset)[0] >= 32768):
                     frameid += "t"
                 imgfilename = os.path.join(dirname, "%s,%d,%d,%d,%d,%d,%d.png" % (
                     frameid,
@@ -38,7 +38,8 @@ def main():
                     thisframeinfo["gunspotx"],
                     thisframeinfo["gunspoty"])
                 )
-                j2a.render_paletted_pixelmap(j2a.make_pixelmap(raw)).save(imgfilename)
+                j2a.render_paletted_pixelmap(j2a.make_pixelmap(frame.data, imageoffset)) \
+                    .save(imgfilename)
         print("Finished extracting set %d (%d animations)" % (setnum, animnum + 1))
 
 if __name__ == "__main__":

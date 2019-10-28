@@ -31,9 +31,8 @@ def show_anim(set_num, anim_num):
     anim = s.animations[anim_num]
 
     frameinfo_l = [frame.header for frame in anim.frames]
-    imageoffsets = [finfo["imageoffset"] for finfo in frameinfo_l]
     images = [
-        anims.render_pixelmap(anims.make_pixelmap(frame.data[frame.header["imageoffset"]:]))
+        anims.render_pixelmap(anims.make_pixelmap(frame.data, frame.header["imageoffset"]))
         for frame in anim.frames
     ]
     fps = anim.fps
@@ -72,9 +71,7 @@ def stress_test(initial_set_num = 0):
     for s in anims.sets:
         for anim in s.animations:
             for frame in anim.frames:
-                frameinfo = frame.header
-                raw = frame.data[frameinfo["imageoffset"]:]
-                anims.make_pixelmap(raw)
+                anims.make_pixelmap(frame.data, frame.header["imageoffset"])
 
 def profile_stress_test(arg):
     '''
