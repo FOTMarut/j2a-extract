@@ -37,6 +37,7 @@ class J2A:
             if pargs:
                 setheader, self._chunks = pargs
                 self._samplecount = setheader["samplecount"]
+                self.samplesstartingindex = setheader["priorsamplecount"]
             else:
                 self._anims = []
                 self._samplecount = 0
@@ -58,7 +59,7 @@ class J2A:
 
         def unpack(self):
             if self._chunks:
-                animinfo, frameinfo, imagedata, self._sampledata = \
+                animinfo, frameinfo, imagedata, sampledata = \
                     (zlib.decompress(c, zlib.MAX_WBITS, usize) for c,usize in self._chunks)
                 animinfo  = list(J2A.Animation._Header.iter_unpack(animinfo))
                 frameinfo = list(J2A.Frame._Header.iter_unpack(frameinfo))
@@ -68,6 +69,14 @@ class J2A:
                     framecount = anim["framecount"]
                     self._anims.append(J2A.Animation.read(anim, frameinfo[:framecount], imagedata))
                     frameinfo = frameinfo[framecount:]
+                self._samples = []
+                offset, length = 0, len(sampledata)
+                while offset < length:
+                    size = struct.unpack_from("<L", sampledata, offset)[0]
+                    self._samples.append(sampledata[offset:offset+size])
+                    offset += size
+                if len(self._samples) != self._samplecount:
+                    print("Warning: internal sample miscount (expected: %d, got: %d)" % (self._samplecount, len(self._samples)))
                 self._chunks = None
             return self
 
@@ -178,6 +187,7 @@ class J2A:
     def unpack(self):
         for s in self.sets:
             s.unpack()
+        return self
 
     def get_palette(self, given = None):
         if not self.palette:

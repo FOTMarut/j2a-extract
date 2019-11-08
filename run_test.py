@@ -1,9 +1,14 @@
 
 from __future__ import print_function
-from j2a import J2A
 import os
 import sys
 from types import FunctionType
+
+from j2a import J2A
+
+if sys.version_info[0] <= 2:
+    input = raw_input
+
 
 def show_frame(set_num, anim_num, frame_num):
     try:
