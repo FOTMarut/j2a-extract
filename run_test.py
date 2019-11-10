@@ -2,6 +2,7 @@
 from __future__ import print_function
 import os
 import sys
+import struct
 from types import FunctionType
 
 from j2a import J2A
@@ -9,6 +10,14 @@ from j2a import J2A
 if sys.version_info[0] <= 2:
     input = raw_input
 
+
+def _read_hdr():
+    global anims, anims_path
+    if "anims" in globals():
+        return anims
+    else:
+        print("Reading animations file", anims_path)
+        return J2A(anims_path).read()
 
 def show_frame(set_num, anim_num, frame_num):
     try:
@@ -55,10 +64,6 @@ def show_anim(set_num, anim_num):
     ax.set_ylim(extremes[1])
     plt.show()
 
-def _read_hdr():
-    global anims_path
-    return J2A(anims_path).read()
-
 def print_j2a_stats():
     anims = _read_hdr()
     print("Jazz Jackrabbit 2 animations file")
@@ -68,6 +73,54 @@ def print_j2a_stats():
         print("\t\tanimcount: {}".format(len(s.animations)))
         print("\t\tsamplecount: {}".format(s._samplecount))
         print("\t\tframecount: {}".format(sum(len(a.frames) for a in s.animations)))
+
+def packing_test():
+    import zlib
+    anims = _read_hdr()
+    pristine_chunks = [s._chunks for s in anims.sets]
+    anims.unpack().pack()
+#     pristine_chunks[-1][2] = (zlib.compress(b'\x00'), 0)
+    new_chunks = [s._chunks for s in anims.sets]
+    failed = False
+    for i, (pset, nset) in enumerate(zip(pristine_chunks, new_chunks)):
+        for pchunk, nchunk in zip(pset, nset):
+            if zlib.decompress(pchunk[0], zlib.MAX_WBITS, pchunk[1]) != zlib.decompress(nchunk[0], zlib.MAX_WBITS, nchunk[1]):
+                print("Difference in set", i)
+                failed = True
+    print("Packing test", "FAILED" if failed else "PASSED")
+
+def generate_compmethod_stats(filename, starting_set=0):
+    import zlib
+    l_level = list(range(1, 10))
+    l_method = [zlib.DEFLATED]
+    l_wbits = [15]
+    l_memLevel = list(range(1, 10))
+    l_strategy = list(range(0, 4))  # 4 (= Z_FIXED) causes SEGFAULT sometimes
+
+    anims = _read_hdr()
+    struct = generate_compmethod_stats.struct
+
+    def dump(f, raw, setnum, chknum, *pargs):
+        print(setnum, chknum, pargs)
+        cobj = zlib.compressobj(*pargs)
+        length = len(cobj.compress(raw)) + len(cobj.flush())
+        f.write(struct.pack(setnum, chknum, *pargs, length))
+
+    with open(filename, "wb") as f:
+        for setnum, s in enumerate(anims.sets):
+            if setnum < starting_set:
+                continue
+            print("Dumping for set", setnum)
+            for chknum, chk in enumerate(s._chunks):
+                raw = zlib.decompress(chk[0], zlib.MAX_WBITS, chk[1])
+                [dump(f, raw, setnum, chknum, level, method, wbits, memLevel, strategy)
+                    for level    in l_level
+                    for method   in l_method
+                    for wbits    in l_wbits
+                    for memLevel in l_memLevel
+                    for strategy in l_strategy
+                ]
+generate_compmethod_stats.struct = struct.Struct("<BBBBBBBL")
 
 def stress_test():
     anims = _read_hdr()

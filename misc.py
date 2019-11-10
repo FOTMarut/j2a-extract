@@ -37,6 +37,9 @@ class NamedStruct(struct.Struct):
             yield self.unpack_from(buffer, offset, *pargs, **kwargs)
             offset += self.size
 
+    def iter_pack(self, iterable):
+        return b''.join(self.pack(**d) for d in iterable)
+
 # TODO: replace dict comprehensions with dict() constructor, if possible
 
 #--- Obsoleted ---

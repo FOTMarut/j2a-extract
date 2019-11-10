@@ -11,8 +11,12 @@ if sys.version_info[0] <= 2:
     input = raw_input
 
 def _read_hdr():
-    global anims_path
-    return J2A(anims_path).read()
+    global anims, anims_path
+    if "anims" in globals():
+        return anims
+    else:
+        print("Reading animations file", anims_path)
+        return J2A(anims_path).read()
 
 import struct
 class RIFFChunk(object):
