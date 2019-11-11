@@ -25,8 +25,7 @@ def pairwise(iterable):
 
 class J2A:
     _Header = misc.NamedStruct("4s|signature/L|magic/L|headersize/h|version/h|unknown/L|filesize/L|crc32/L|setcount")
-    _defaultpalette = "Diamondus_2.pal"
-    _defaultcompressmethod = 9
+    _defaultconfig = {"palette": "Diamondus_2.pal", "compress_method": 9}
 
     class J2AParseError(Exception):
         pass
@@ -88,9 +87,8 @@ class J2A:
             return self
 
         @staticmethod
-        def _compress(animinfo, frameinfo, imagedata, sampledata, compress_method=None):
-            if compress_method is None:
-                compress_method = J2A._defaultcompressmethod
+        def _compress(animinfo, frameinfo, imagedata, sampledata, config):
+            compress_method = config["compress_method"]
 
             if isinstance(compress_method, int):
                 return [(zlib.compress(c, compress_method), len(c)) for c in (animinfo, frameinfo, imagedata, sampledata)]
@@ -111,8 +109,8 @@ class J2A:
             else:
                 raise ValueError("Invalid compress_method specified")
 
-        def serialize(self, compress_method=None):
-            self.pack(compress_method)
+        def serialize(self, config):
+            self.pack(config)
             setheader = {
                 "signature": b'ANIM',
                 "animcount": self._chunks[0][1] // J2A.Animation._Header.size,
@@ -126,7 +124,7 @@ class J2A:
 
             return b''.join( [J2A.Set._Header.pack(**setheader)] + [c[0] for c in self._chunks] )
 
-        def pack(self, compress_method=None):
+        def pack(self, config):
             if not self._chunks:
                 animinfo = J2A.Animation._Header.iter_pack(
                     {"framecount": len(a.frames), "fps": a.fps, "reserved": 0} for a in self._anims
@@ -136,8 +134,7 @@ class J2A:
                 sampledata = b''.join(self._samples)
                 self._samplecount = len(self._samples)
 
-#                 self._chunks = [(zlib.compress(c, compress_method), len(c)) for c in (animinfo, frameinfo, imagedata, sampledata)]
-                self._chunks = J2A.Set._compress(animinfo, frameinfo, imagedata, sampledata, compress_method)
+                self._chunks = J2A.Set._compress(animinfo, frameinfo, imagedata, sampledata, config)
                 del self._anims, self._samples
             return self
 
@@ -184,6 +181,7 @@ class J2A:
         self.palette = None
         self.sets = []
         self.set_filename(filename)
+        self.config = J2A._defaultconfig.copy()
 
     def set_filename(self, filename):
         self.filename = filename
@@ -247,14 +245,18 @@ class J2A:
             s.unpack()
         return self
 
-    def write(self, filename=None, compress_method=None):
+    def write(self, filename=None):
         if filename is None:
             filename = self.filename
-        self.pack(compress_method)
+        self.pack()
         setcount = len(self.sets)
-        set_data = [s.serialize() for s in self.sets]
-        set_offsets = list(itertools.accumulate(itertools.chain([J2A._Header.size + 4 * setcount], (len(sdata) for sdata in set_data))))
-        set_offsets_raw = struct.pack("<%dL" % setcount, *set_offsets[:-1])
+        set_data = [s.serialize(self.config) for s in self.sets]
+        set_offsets = []
+        cur_offset = headersize = J2A._Header.size + 4 * setcount
+        for sdata in set_data:
+            set_offsets.append(cur_offset)
+            cur_offset += len(sdata)
+        set_offsets_raw = struct.pack("<%dL" % setcount, *set_offsets)
         crc = zlib.crc32(set_offsets_raw)
         for sdata in set_data:
             crc = zlib.crc32(sdata, crc)
@@ -262,11 +264,11 @@ class J2A:
             f.write(J2A._Header.pack(
                 signature=b'ALIB',
                 magic=0x00BEBA00,
-                headersize=set_offsets[0],
+                headersize=headersize,
                 version=0x200,
                 unknown=0x1808,
-                filesize=set_offsets[-1],
-                crc32=crc,
+                filesize=cur_offset,
+                crc32=crc & 0xffffffff,
                 setcount=setcount
             ))
             f.write(set_offsets_raw)
@@ -274,14 +276,14 @@ class J2A:
                 f.write(sdata)
         return self
 
-    def pack(self, compress_method=None):
+    def pack(self):
         for s in self.sets:
-            s.pack(compress_method)
+            s.pack(self.config)
         return self
 
     def get_palette(self, given = None):
         if not self.palette:
-            palfile = open(self._defaultpalette).readlines() if not given else given
+            palfile = open(self.config["palette"]).readlines() if not given else given
             pal = list()
             for i in range(3, 259):
                 color = palfile[i].rstrip("\n").split(' ')

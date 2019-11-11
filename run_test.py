@@ -100,11 +100,11 @@ def generate_compmethod_stats(filename, starting_set=0):
     anims = _read_hdr()
     struct = generate_compmethod_stats.struct
 
-    def dump(f, raw, setnum, chknum, *pargs):
+    def dump(f, raw, setnum, chknum, level, method, wbits, memLevel, strategy):
         print(setnum, chknum, pargs)
         cobj = zlib.compressobj(*pargs)
         length = len(cobj.compress(raw)) + len(cobj.flush())
-        f.write(struct.pack(setnum, chknum, *pargs, length))
+        f.write(struct.pack(setnum, chknum, level, method, wbits, memLevel, strategy, length))
 
     with open(filename, "wb") as f:
         for setnum, s in enumerate(anims.sets):
@@ -128,6 +128,24 @@ def stress_test():
         for anim in s.animations:
             for frame in anim.frames:
                 anims.make_pixelmap(frame.data, frame.header["imageoffset"])
+
+def writing_test():
+    import io
+    anims = _read_hdr()
+    anims.unpack()
+    my_out = io.BytesIO()
+    my_out.close = lambda : None
+    def open_mock(filename, mode):
+        assert(filename == "TEST" and mode in ("rb", "wb"))
+        my_out.seek(0)
+        return my_out
+    if sys.version_info[0] <= 2:
+        __builtins__.open = open_mock
+    else:
+        import builtins
+        builtins.open = open_mock
+    anims.write("TEST")
+    anims2 = J2A("TEST").read()
 
 def unpacking_test():
     anims = _read_hdr()

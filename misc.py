@@ -40,6 +40,16 @@ class NamedStruct(struct.Struct):
     def iter_pack(self, iterable):
         return b''.join(self.pack(**d) for d in iterable)
 
+
+def fake_crc(target_crc):
+    target_crc ^= 0xffffffff
+    for _ in range(32):
+        target_crc <<= 1
+        if target_crc & 0x100000000:
+            target_crc ^= 0x1db710641
+    return target_crc ^ 0xffffffff
+
+
 # TODO: replace dict comprehensions with dict() constructor, if possible
 
 #--- Obsoleted ---
