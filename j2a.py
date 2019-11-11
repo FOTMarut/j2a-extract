@@ -15,6 +15,9 @@ from PIL import Image, ImageDraw
 
 import misc
 
+if sys.version_info[0] < 3:
+    zip = itertools.izip
+
 # From the official Python docs
 def pairwise(iterable):
     "s -> (s0,s1), (s1,s2), (s2, s3), ..."
@@ -22,10 +25,23 @@ def pairwise(iterable):
     next(b, None)
     return zip(a, b)
 
+# From the official Python docs
+def grouper(iterable, n):
+    "Collect data into fixed-length chunks or blocks"
+    # grouper('ABCDEF', 3) --> ABC DEF
+    args = [iter(iterable)] * n
+    return zip(*args)
+
+# From the official Python docs
+def take(n, iterable):
+    "Return first n items of the iterable as a list"
+    return list(itertools.islice(iterable, n))
+
 
 class J2A:
     _Header = misc.NamedStruct("4s|signature/L|magic/L|headersize/h|version/h|unknown/L|filesize/L|crc32/L|setcount")
     _defaultconfig = {"palette": "Diamondus_2.pal", "compress_method": 9}
+    # TODO: add config options for null sets and faking crc/size
 
     class J2AParseError(Exception):
         pass
@@ -66,13 +82,12 @@ class J2A:
 
                 animinfo  = (J2A.Animation._Header.iter_unpack(animinfo))
                 frameinfo = list(J2A.Frame._Header.iter_unpack(frameinfo))
-                imagedata = array.array("B", imagedata)
 
-                self._anims = []
-                for anim in animinfo:
-                    framecount = anim["framecount"]
-                    self._anims.append(J2A.Animation.read(anim, frameinfo[:framecount], imagedata))
-                    frameinfo = frameinfo[framecount:]
+                offsets = sorted((info[key], 2*i+j) for i, info in enumerate(frameinfo) for j, key in enumerate(("imageoffset", "maskoffset")))
+                offsets.append((len(imagedata), 2*len(frameinfo)))
+                data = sorted((i1, imagedata[o1:o2]) for (o1, i1), (o2, i2) in pairwise(offsets))
+                frames = (J2A.Frame.read(info, img, mask) for ((i1, img), (i2, mask)), info in zip(grouper(data, 2), frameinfo))
+                self._anims = [J2A.Animation(frames=take(info["framecount"], frames), fps=info["fps"]) for info in animinfo]
 
                 self._samples = []
                 offset, length = 0, len(sampledata)
@@ -129,12 +144,23 @@ class J2A:
                 animinfo = J2A.Animation._Header.iter_pack(
                     {"framecount": len(a.frames), "fps": a.fps, "reserved": 0} for a in self._anims
                 )
-                frameinfo = J2A.Frame._Header.iter_pack(f.header for a in self._anims for f in a.frames)
-                imagedata = bytes(self._anims[0].frames[0].data if (self._anims and self._anims[0].frames) else [])
+                l_frameinfo = []
+                img_data, mask_data = b'', b''
+                for a in self._anims:
+                    for f in a.frames:
+                        l_frameinfo.append(f.encode_image()._get_header(len(img_data), len(mask_data)))
+                        width, height = f.shape
+                        img_data += struct.pack("<HH", (width | 0x8000 if f.tagged else width), height)
+                        img_data += f._rle_encoded_pixmap
+                        mask_data += f.mask
+                img_length = len(img_data)
+                for frame_info in l_frameinfo:
+                    frame_info["maskoffset"] += img_length
+                frameinfo = J2A.Frame._Header.iter_pack(l_frameinfo)
                 sampledata = b''.join(self._samples)
                 self._samplecount = len(self._samples)
 
-                self._chunks = J2A.Set._compress(animinfo, frameinfo, imagedata, sampledata, config)
+                self._chunks = J2A.Set._compress(animinfo, frameinfo, img_data + mask_data, sampledata, config)
                 del self._anims, self._samples
             return self
 
@@ -152,28 +178,102 @@ class J2A:
     class Animation:
         _Header = misc.NamedStruct("H|framecount/H|fps/l|reserved")
 
-        def __init__(self, frames, fps):
-            self.frames = frames
-            self.fps = fps
-
-        @staticmethod
-        def read(animinfo, frameinfo_l, imagedata):
-            return J2A.Animation(
-                [J2A.Frame.read(frameinfo, imagedata) for frameinfo in frameinfo_l],
-                animinfo["fps"]
-            )
+        def __init__(self, frames=[], fps=10):
+            self.frames, self.fps = frames, fps
 
 
     class Frame:
         _Header = misc.NamedStruct("H|width/H|height/h|coldspotx/h|coldspoty/h|hotspotx/h|hotspoty/h|gunspotx/h|gunspoty/L|imageoffset/L|maskoffset")
 
-        def __init__(self, frameinfo, imagedata):
-            self.header = frameinfo
-            self.data = imagedata
+        def __init__(self, shape=None, origin=None, coldspot=None, gunspot=None, pixmap=None, mask=None, rle_encoded_pixmap=None, tagged=False):
+            assert(pixmap is None or rle_encoded_pixmap is None)
+            self.shape, self.origin, self.coldspot, self.gunspot, self.mask, self.tagged = shape, origin, coldspot, gunspot, mask, tagged
+            if not rle_encoded_pixmap is None:
+                self._rle_encoded_pixmap = rle_encoded_pixmap
+            elif not pixmap is None:
+                self._pixmap = pixmap
+
+        def _get_header(self, img_offset, mask_offset):
+            return dict((k, v) for k, v in zip(
+                J2A.Frame._Header._names,
+                self.shape + self.coldspot + self.origin + self.gunspot + (img_offset, mask_offset)
+            ))
 
         @staticmethod
-        def read(frameinfo, imagedata):
-            return J2A.Frame(frameinfo, imagedata)
+        def read(frameinfo, imagedata, maskdata):
+            width, height = struct.unpack_from("<HH", imagedata)
+            tagged = bool(width & 0x8000)
+            width &= 0x7FFF
+            assert(width == frameinfo["width"] and height == frameinfo["height"])
+            return J2A.Frame(
+                shape = (width, height),
+                origin = (frameinfo["hotspotx"], frameinfo["hotspoty"]),
+                coldspot = (frameinfo["coldspotx"], frameinfo["coldspoty"]),
+                gunspot = (frameinfo["gunspotx"], frameinfo["gunspoty"]),
+                rle_encoded_pixmap = imagedata[4:],
+                mask = maskdata,
+                tagged = tagged
+            )
+
+        # TODO: need to stress test these two methods
+        def decode_image(self):
+            if not hasattr(self, "_pixmap"):
+                width, height = self.shape
+                raw = array.array("B", self._rle_encoded_pixmap)
+                #prepare pixmap
+                pixmap = [[0]*width for _ in range(height)]
+                #fill it with data! (image format parser)
+                length = len(raw)
+                x = y = i = 0
+                # This loop fails silently if decoding would cause OOB exceptions
+                while i < length:
+                    byte = raw[i]
+                    if byte > 128:
+                        byte -= 128
+                        l = min(byte, width - x)
+                        pixmap[y][x:x+l] = raw[i+1:i+1+l]
+                        x += byte
+                        i += byte
+                    elif byte < 128:
+                        x += byte
+                    else:
+                        x = 0
+                        y += 1
+                        if y >= height:
+                            break
+                    i += 1
+                self._pixmap = pixmap
+                del self._rle_encoded_pixmap
+            return self
+
+        def encode_image(self):
+            if not hasattr(self, "_rle_encoded_pixmap"):
+                encoded = array.array("B")
+                for row in self._pixmap:
+                    while True:
+                        row = bytes(row)
+                        length = len(row)
+                        row = row.lstrip(b'\x00')
+                        if not row:
+                            break
+                        length -= len(row)
+                        while length:
+                            m = min(length, 0x7f)
+                            encoded.append(m)
+                            length -= m
+                        length = row.find(b'\x00')
+                        if length == -1:
+                            length = len(row)
+                        while length:
+                            m = min(length, 0x7f)
+                            encoded.append(m ^ 0x80)
+                            encoded += array.array("B", row[:m])
+                            row = row[m:]
+                            length -= m
+                    encoded.append(0x80)
+                self._rle_encoded_pixmap = encoded
+                del self._pixmap
+            return self
 
 
     def __init__(self, filename):
@@ -293,51 +393,21 @@ class J2A:
 
         return self.palette
 
-    @staticmethod
-    def make_pixelmap(raw, offset=0):
-        width, height = struct.unpack_from("<HH", raw, offset)
-        width &= 0x7FFF #unset msb
-        #prepare pixmap
-        pixmap = [[0]*width for _ in range(height)]
-        #fill it with data! (image format parser)
-        length = len(raw)
-        x = y = 0
-        i = offset + 4
-        # This loop fails silently if decoding would cause OOB exceptions
-        while i < length:
-            byte = raw[i]
-            if byte > 128:
-                byte -= 128
-                l = min(byte, width - x)
-                pixmap[y][x:x+l] = raw[i+1:i+1+l]
-                x += byte
-                i += byte
-            elif byte < 128:
-                x += byte
-            else:
-                x = 0
-                y += 1
-                if y >= height:
-                    break
-            i += 1
-        return pixmap
-
-    def render_pixelmap(self, pixelmap):
-        width, height = (len(pixelmap[0]), len(pixelmap))
-        img = Image.new("RGBA", (width, height))
+    def render_pixelmap(self, frame):
+        img = Image.new("RGBA", frame.shape)
         im = img.load()
         pal = self.get_palette()
 
-        for x, row in enumerate(pixelmap):
+        for x, row in enumerate(frame.decode_image()._pixmap):
             for y, index in enumerate(row):
                 if index > 1:
                     im[y, x] = pal[index]
 
         return img
 
-    def render_paletted_pixelmap(self, pixelmap):
-        width, height = (len(pixelmap[0]), len(pixelmap))
-        img = Image.new("P", (width, height))
+    def render_paletted_pixelmap(self, frame):
+        pixelmap = frame.decode_image()._pixmap
+        img = Image.new("P", frame.shape)
         img.putdata([pixel for col in pixelmap for pixel in col])
         self.get_palette()
         img.putpalette(self.palettesequence)
@@ -349,8 +419,7 @@ class J2A:
         anim = s.animations[anim_num]
         frame = anim.frames[frame_num]
 
-        pixelmap = self.make_pixelmap(frame.data, frame.header["imageoffset"])
-        return [frame.header, self.render_pixelmap(pixelmap)]
+        return [frame, self.render_pixelmap(frame)]
 
     def render_frame(self, *coordinates):
         self.get_frame(*coordinates)[1].save("preview.png", "PNG")

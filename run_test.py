@@ -31,9 +31,14 @@ def show_frame(set_num, anim_num, frame_num):
             img.show()
 
     anims = _read_hdr()
-    frame = anims.get_frame(set_num, anim_num, frame_num)
-    if frame:
-        show_img(frame[1])
+    try:
+        frame = anims.sets[set_num].animations[anim_num].frames[frame_num]
+    except IndexError:
+        print("Error: some index was out of bounds")
+        return 1
+
+    rendered = anims.render_pixelmap(frame)
+    show_img(rendered)
 
 def show_anim(set_num, anim_num):
     import numpy as np
@@ -44,14 +49,11 @@ def show_anim(set_num, anim_num):
     s = anims.sets[set_num]
     anim = s.animations[anim_num]
 
-    frameinfo_l = [frame.header for frame in anim.frames]
-    images = [
-        anims.render_pixelmap(anims.make_pixelmap(frame.data, frame.header["imageoffset"]))
-        for frame in anim.frames
-    ]
+    images = [anims.render_pixelmap(frame) for frame in anim.frames]
     fps = anim.fps
 
-    borders = np.array([[finfo["hotspotx"], finfo["width"], finfo["hotspoty"], finfo["height"]] for finfo in frameinfo_l])
+#     borders = np.array([[finfo["hotspotx"], finfo["width"], finfo["hotspoty"], finfo["height"]] for finfo in frameinfo_l])
+    borders = np.array([[frame.origin[0], frame.shape[0], frame.origin[1], frame.shape[1]] for frame in anim.frames])
     borders[:,1] += borders[:,0]
     borders[:,3] += borders[:,2]
     extremes = ((borders[:,0].min(), borders[:,1].max()), (borders[:,2].min(), borders[:,3].max()))
@@ -145,7 +147,7 @@ def writing_test():
         import builtins
         builtins.open = open_mock
     anims.write("TEST")
-    anims2 = J2A("TEST").read()
+    anims2 = J2A("TEST").read().unpack()
 
 def unpacking_test():
     anims = _read_hdr()
@@ -208,4 +210,6 @@ if __name__ == "__main__":
     anims_path = anims_path or os.path.join(os.path.dirname(sys.argv[0]), "Anims.j2a")
 
     print("Calling {} with arguments: {}".format(sys.argv[1], fargs))
-    fmap[sys.argv[1]](*fargs)
+    retval = fmap[sys.argv[1]](*fargs)
+    if isinstance(retval, int):
+        sys.exit(retval)

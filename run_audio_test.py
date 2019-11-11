@@ -287,4 +287,6 @@ if __name__ == "__main__":
     anims_path = anims_path or os.path.join(os.path.dirname(sys.argv[0]), "Anims.j2a")
 
     print("Calling {} with arguments: {}".format(sys.argv[1], fargs))
-    fmap[sys.argv[1]](*fargs)
+    retval = fmap[sys.argv[1]](*fargs)
+    if isinstance(retval, int):
+        sys.exit(retval)
