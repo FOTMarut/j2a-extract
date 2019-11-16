@@ -2,6 +2,7 @@
 from __future__ import print_function
 import os
 import sys
+import struct
 from types import FunctionType
 
 from j2a import J2A
@@ -18,7 +19,6 @@ def _read_hdr():
         print("Reading animations file", anims_path)
         return J2A(anims_path).read()
 
-import struct
 class RIFFChunk(object):
     _Header = struct.Struct("<4sL")
 

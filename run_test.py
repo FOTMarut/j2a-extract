@@ -3,6 +3,8 @@ from __future__ import print_function
 import os
 import sys
 import struct
+import itertools
+import zlib
 from types import FunctionType
 
 from j2a import J2A
@@ -76,23 +78,7 @@ def print_j2a_stats():
         print("\t\tsamplecount: {}".format(s._samplecount))
         print("\t\tframecount: {}".format(sum(len(a.frames) for a in s.animations)))
 
-def packing_test():
-    import zlib
-    anims = _read_hdr()
-    pristine_chunks = [s._chunks for s in anims.sets]
-    anims.unpack().pack()
-#     pristine_chunks[-1][2] = (zlib.compress(b'\x00'), 0)
-    new_chunks = [s._chunks for s in anims.sets]
-    failed = False
-    for i, (pset, nset) in enumerate(zip(pristine_chunks, new_chunks)):
-        for pchunk, nchunk in zip(pset, nset):
-            if zlib.decompress(pchunk[0], zlib.MAX_WBITS, pchunk[1]) != zlib.decompress(nchunk[0], zlib.MAX_WBITS, nchunk[1]):
-                print("Difference in set", i)
-                failed = True
-    print("Packing test", "FAILED" if failed else "PASSED")
-
 def generate_compmethod_stats(filename, starting_set=0):
-    import zlib
     l_level = list(range(1, 10))
     l_method = [zlib.DEFLATED]
     l_wbits = [15]
@@ -129,7 +115,7 @@ def stress_test():
     for s in anims.sets:
         for anim in s.animations:
             for frame in anim.frames:
-                anims.make_pixelmap(frame.data, frame.header["imageoffset"])
+                anims.render_pixelmap(frame)
 
 def writing_test():
     import io
@@ -153,6 +139,67 @@ def unpacking_test():
     anims = _read_hdr()
     anims.unpack()
 
+def packing_test():
+    anims = _read_hdr()
+    pristine_chunks = [s._chunks for s in anims.sets]
+    anims.unpack().pack()
+#     pristine_chunks[-1][2] = (zlib.compress(b'\x00'), 0)
+    new_chunks = [s._chunks for s in anims.sets]
+    failed = False
+    for i, (pset, nset) in enumerate(zip(pristine_chunks, new_chunks)):
+        for chunk_num, pchunk, nchunk in zip(range(4), pset, nset):
+            if zlib.decompress(pchunk[0], zlib.MAX_WBITS, pchunk[1]) != zlib.decompress(nchunk[0], zlib.MAX_WBITS, nchunk[1]):
+                print("Difference in set %d, chunk %d" % (i, chunk_num))
+                failed = True
+    print("Packing test", "FAILED" if failed else "PASSED")
+
+def _random_pixmap(seed=None, width=260, height=80):
+    import numpy as np
+    import random
+    random.seed(seed)
+    def gen(func, limit):
+        csum = 0
+        while True:
+            val = func()
+            csum += val
+            if csum < limit:
+                yield val
+            else:
+                yield val - csum + limit
+                break
+    a0 = b''.join(b * times for times, b in zip(gen(lambda : random.randrange(255), width * height), itertools.cycle([b'\x00', b'\xff'])))
+    assert(len(a0) == width * height)
+    return np.frombuffer(a0, dtype=np.uint8).reshape((height, width))
+
+def frame_encoding_test(seed=None):
+    a = _random_pixmap()
+    frame = J2A.Frame(shape = a.shape[::-1], pixmap = a)
+    frame.encode_image()
+
+def mask_autogen_test(times = 1):
+    from random import randint
+    def bit_iter(a):
+        for elt in a:
+            for _ in range(8):
+                yield elt & 1
+                elt >>= 1
+    try:
+        for _ in range(times):
+            width, height = randint(1, 50), randint(1, 50)
+            pixmap = _random_pixmap(None, width, height)
+#             pixmap = [[max(0, randint(-128, 127)) for _ in range(width)] for _ in range(height)]
+            frame = J2A.Frame(shape = (width, height), pixmap = pixmap)
+            frame.autogenerate_mask()
+            mask = bytearray(frame.mask)
+            for bit, pix in zip(bit_iter(mask), itertools.chain(*pixmap)):
+                assert(bit == bool(pix))
+            assert(mask[-1] >> (1 + ((width*height - 1) & 7)) == 0)
+    except AssertionError as e:
+        print(width, height)
+        print(pixmap)
+        print(mask.hex())
+        raise
+
 def profile_func(funcname, arg, *pargs):
     '''
     Call function repeatedly according to the condition specified by `arg`.
@@ -168,7 +215,6 @@ def profile_func(funcname, arg, *pargs):
     > python -m pstats <file>
     '''
     from time import time
-    import itertools
     global fmap
     f = fmap[funcname]
     startingtime = time()

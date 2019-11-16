@@ -11,7 +11,7 @@ import sys
 import zlib
 import array
 #needs python image library, http://www.pythonware.com/library/pil/
-from PIL import Image, ImageDraw
+from PIL import Image
 
 import misc
 
@@ -37,13 +37,27 @@ def take(n, iterable):
     "Return first n items of the iterable as a list"
     return list(itertools.islice(iterable, n))
 
+def raising_function(string, exception):
+    raise exception(string)
 
+
+# TODO: add __slots__ definitions
+# TODO: use bytearray instead of array.array
+# TODO: add raise from clauses
 class J2A:
     _Header = misc.NamedStruct("4s|signature/L|magic/L|headersize/h|version/h|unknown/L|filesize/L|crc32/L|setcount")
-    _defaultconfig = {"palette": "Diamondus_2.pal", "compress_method": 9}
-    # TODO: add config options for null sets and faking crc/size
+    _defaultconfig = {"palette": "Diamondus_2.pal", "compress_method": 9, "null_image": "error", "null_mask": "ignore",
+        "fake_size_and_crc": None, "empty_set": None}
+    _error_action = {
+        "ignore":  (lambda s, c: None),
+        "warning": (lambda s, c: print("Warning:", s, file=sys.stderr)),
+        "error":   raising_function
+    }
 
-    class J2AParseError(Exception):
+    class J2AParsingError(Exception):
+        pass
+
+    class J2APackingError(Exception):
         pass
 
     class Set(object):
@@ -60,6 +74,12 @@ class J2A:
                 self._chunks = None
                 if "samplesbaseindex" in kwargs:
                     self.samplesbaseindex = kwargs["samplesbaseindex"]
+
+        def is_empty(self):
+            if self._chunks:
+                return 0 == self._chunks[0][1] + self._chunks[3][1]
+            else:
+                return 0 == len(self._anims) + len(self._samples)
 
         @staticmethod
         def read(f, crc):
@@ -85,7 +105,9 @@ class J2A:
 
                 offsets = sorted((info[key], 2*i+j) for i, info in enumerate(frameinfo) for j, key in enumerate(("imageoffset", "maskoffset")))
                 offsets.append((len(imagedata), 2*len(frameinfo)))
-                data = sorted((i1, imagedata[o1:o2]) for (o1, i1), (o2, i2) in pairwise(offsets))
+                if take(1, (o for o,i in offsets if o != -1 and o & 3)):
+                    print("Warning: unaligned offset found while unpacking", file=sys.stderr)
+                data = sorted((i1, None) if o1 == -1 else (i1, imagedata[o1:o2]) for (o1, i1), (o2, i2) in pairwise(offsets))
                 frames = (J2A.Frame.read(info, img, mask) for ((i1, img), (i2, mask)), info in zip(grouper(data, 2), frameinfo))
                 self._anims = [J2A.Animation(frames=take(info["framecount"], frames), fps=info["fps"]) for info in animinfo]
 
@@ -96,9 +118,10 @@ class J2A:
                     self._samples.append(sampledata[offset:offset+size])
                     offset += size
                 if len(self._samples) != self._samplecount:
-                    print("Warning: internal sample miscount (expected: %d, got: %d)" % (self._samplecount, len(self._samples)))
+                    print("Warning: internal sample miscount (expected: %d, got: %d)" % (self._samplecount, len(self._samples)), file=sys.stderr)
 
                 self._chunks = None
+                del self._samplecount
             return self
 
         @staticmethod
@@ -125,13 +148,25 @@ class J2A:
                 raise ValueError("Invalid compress_method specified")
 
         def serialize(self, config):
+            if config["empty_set"] == "crop" and self.is_empty():
+                return b''
+
             self.pack(config)
+
+            try:
+                samplesbaseindex = self.samplesbaseindex
+            except AttributeError:
+                if self._samplecount == 0:
+                    samplesbaseindex = 0
+                else:
+                    raise J2APackingError("'samplesbaseindex' member must be set when packing a set with samples")
+
             setheader = {
                 "signature": b'ANIM',
                 "animcount": self._chunks[0][1] // J2A.Animation._Header.size,
                 "samplecount": self._samplecount,
                 "framecount": self._chunks[1][1] // J2A.Frame._Header.size,
-                "priorsamplecount": self.samplesbaseindex  # Don't forget to set this before saving!
+                "priorsamplecount": samplesbaseindex
             }
             for k, (chunk, usize) in zip("1234", self._chunks):
                 setheader["c" + k] = len(chunk)
@@ -146,16 +181,37 @@ class J2A:
                 )
                 l_frameinfo = []
                 img_data, mask_data = b'', b''
-                for a in self._anims:
-                    for f in a.frames:
-                        l_frameinfo.append(f.encode_image()._get_header(len(img_data), len(mask_data)))
+                null_pixmaps = null_masks = 0
+                for an,a in enumerate(self._anims):
+                    for fn,f in enumerate(a.frames):
+                        f.encode_image()
+                        no_pixmap, no_mask = (f._rle_encoded_pixmap is None, f.mask is None)
+                        l_frameinfo.append(f._get_header(
+                            -1 if no_pixmap else len(img_data),
+                            -1 if no_mask   else len(mask_data)
+                        ))
                         width, height = f.shape
                         img_data += struct.pack("<HH", (width | 0x8000 if f.tagged else width), height)
-                        img_data += f._rle_encoded_pixmap
-                        mask_data += f.mask
+
+                        if no_pixmap:
+                            null_pixmaps += 1
+                        else: # Image and mask data should be aligned to a 4-byte boundary
+                            img_data += f._rle_encoded_pixmap + b'\x00' * (-len(f._rle_encoded_pixmap) & 3)
+
+                        if no_mask:
+                            null_masks += 1
+                        else:
+                            mask_data += f.mask + b'\x00' * (-len(f.mask) & 3)
+
+                if null_pixmaps > 0:
+                    J2A._error_action[config["null_image"]]("found %d frames with null images" % null_pixmaps, J2A.J2APackingError)
+                if null_masks > 0:
+                    J2A._error_action[config["null_mask" ]]("found %d frames with null masks"  % null_masks  , J2A.J2APackingError)
+
                 img_length = len(img_data)
                 for frame_info in l_frameinfo:
-                    frame_info["maskoffset"] += img_length
+                    maskoffset = frame_info["maskoffset"]
+                    frame_info["maskoffset"] = maskoffset + img_length if maskoffset != -1 else -1
                 frameinfo = J2A.Frame._Header.iter_pack(l_frameinfo)
                 sampledata = b''.join(self._samples)
                 self._samplecount = len(self._samples)
@@ -178,19 +234,28 @@ class J2A:
     class Animation:
         _Header = misc.NamedStruct("H|framecount/H|fps/l|reserved")
 
-        def __init__(self, frames=[], fps=10):
+        def __init__(self, frames=None, fps=10):
+            if frames is None:
+                frames = []
             self.frames, self.fps = frames, fps
 
 
     class Frame:
-        _Header = misc.NamedStruct("H|width/H|height/h|coldspotx/h|coldspoty/h|hotspotx/h|hotspoty/h|gunspotx/h|gunspoty/L|imageoffset/L|maskoffset")
+        _Header = misc.NamedStruct("H|width/H|height/h|coldspotx/h|coldspoty/h|hotspotx/h|hotspoty/h|gunspotx/h|gunspoty/l|imageoffset/l|maskoffset")
 
         def __init__(self, shape=None, origin=None, coldspot=None, gunspot=None, pixmap=None, mask=None, rle_encoded_pixmap=None, tagged=False):
-            assert(pixmap is None or rle_encoded_pixmap is None)
+            assert((pixmap is None) ^ (rle_encoded_pixmap is None))
             self.shape, self.origin, self.coldspot, self.gunspot, self.mask, self.tagged = shape, origin, coldspot, gunspot, mask, tagged
             if not rle_encoded_pixmap is None:
+                assert(not shape is None)
                 self._rle_encoded_pixmap = rle_encoded_pixmap
-            elif not pixmap is None:
+            elif isinstance(pixmap, Image.Image):
+                assert(shape is None or shape == pixmap.size)
+                self.shape = pixmap.size
+                width, height = pixmap.size
+                self._pixmap = [bytearray(row) for row in grouper(pixmap.tobytes(), width)]
+                assert(len(self._pixmap) == height)
+            else:
                 self._pixmap = pixmap
 
         def _get_header(self, img_offset, mask_offset):
@@ -271,17 +336,26 @@ class J2A:
                             row = row[m:]
                             length -= m
                     encoded.append(0x80)
-                self._rle_encoded_pixmap = encoded
+                self._rle_encoded_pixmap = bytes(encoded)
                 del self._pixmap
             return self
 
+        def autogenerate_mask(self):
+            self.decode_image()
+            mask = bytearray(b'\x00') * ((self.shape[0] * self.shape[1] + 7) // 8)
+            pix_iter = itertools.chain(*self._pixmap)
+            for i in range(len(mask)):
+                mask[i] = sum(bool(pix) << j for j, pix in enumerate(take(8, pix_iter)))
+            self.mask = bytes(mask)
+            return self
 
-    def __init__(self, filename):
+    def __init__(self, filename=None, **kwargs):
         ''' initializes class, sets file name '''
         self.palette = None
         self.sets = []
         self.set_filename(filename)
         self.config = J2A._defaultconfig.copy()
+        self.config.update(kwargs)
 
     def set_filename(self, filename):
         self.filename = filename
@@ -291,11 +365,11 @@ class J2A:
     def _seek(f, newpos):
         delta = newpos - f.tell()
         if delta > 0:
-            print("Warning: skipping over %d bytes" % delta)
+            print("Warning: skipping over %d bytes" % delta, file=sys.stderr)
             b = f.read(delta)
             assert(len(b) == delta)
         elif delta < 0:
-            raise J2AParseError("File is not a valid J2A file (overlapping sets)")
+            raise J2AParsingError("File is not a valid J2A file (overlapping sets)")
 
     def read(self):
         ''' reads whole J2A file, parses ALIB and ANIM headers and collects all sets '''
@@ -328,15 +402,16 @@ class J2A:
                             ps_miscounts += 1
                         prevsamplecount = s._samplecount + reported_psc
                         self.sets.append(s)
-                if ps_miscounts:
-                    print("Warning: %d sample miscounts detected (this is expected for the shareware demo)" % ps_miscounts)
-                if crc & 0xffffffff != alibheader["crc32"]:
-                    print("Warning: CRC32 mismatch in J2A file %s. Ignoring..." % self.filename, file=sys.stderr)
+                if ps_miscounts:  # TODO: remove this check entirely, it's bogus
+                    print("Warning: %d sample miscounts detected (this is expected for the shareware demo)" % ps_miscounts, file=sys.stderr)
                 raw = j2afile.read()
                 if raw:
                     print("Warning: extra %d bytes found at the end of J2A file %s. Ignoring..." % (len(raw), self.filename), file=sys.stderr)
+                    crc = zlib.crc32(raw, crc)
+                if crc & 0xffffffff != alibheader["crc32"]:
+                    print("Warning: CRC32 mismatch in J2A file %s. Ignoring..." % self.filename, file=sys.stderr)
             except (AssertionError, struct.error):
-                raise J2A.J2AParseError("File %s is not a valid J2A file" % self.filename)
+                raise J2A.J2AParsingError("File %s is not a valid J2A file" % self.filename)
 
         return self
 
@@ -348,18 +423,39 @@ class J2A:
     def write(self, filename=None):
         if filename is None:
             filename = self.filename
+            if filename is None:
+                raise J2APackingError("no filename specified")
         self.pack()
         setcount = len(self.sets)
         set_data = [s.serialize(self.config) for s in self.sets]
         set_offsets = []
         cur_offset = headersize = J2A._Header.size + 4 * setcount
         for sdata in set_data:
-            set_offsets.append(cur_offset)
-            cur_offset += len(sdata)
+            set_length = len(sdata)
+            set_offsets.append(cur_offset if set_length > 0 else 0)
+            cur_offset += set_length
         set_offsets_raw = struct.pack("<%dL" % setcount, *set_offsets)
         crc = zlib.crc32(set_offsets_raw)
         for sdata in set_data:
             crc = zlib.crc32(sdata, crc)
+        crc &= 0xffffffff
+
+        extra_data = b''
+        if not self.config["fake_size_and_crc"] is None:
+            target_filesize, target_crc = self.config["fake_size_and_crc"]
+            target_crc &= 0xffffffff
+            if (cur_offset, crc) != (target_filesize, target_crc):
+                if target_filesize - cur_offset < 4:
+                    raise J2APackingError("Can't fake filesize and CRC32, obtained size is too large")
+                extra_data = b'\x00' * (target_filesize - cur_offset - 4)
+                crc = zlib.crc32(extra_data, crc)
+                salt = misc.fake_crc(target_crc)
+                salt = struct.pack("<L", crc ^ salt)
+                extra_data += salt
+                crc = zlib.crc32(salt, crc)
+                cur_offset += len(extra_data)
+                assert(crc == target_crc and cur_offset == target_filesize)
+
         with open(filename, "wb") as f:
             f.write(J2A._Header.pack(
                 signature=b'ALIB',
@@ -368,12 +464,14 @@ class J2A:
                 version=0x200,
                 unknown=0x1808,
                 filesize=cur_offset,
-                crc32=crc & 0xffffffff,
+                crc32=crc,
                 setcount=setcount
             ))
             f.write(set_offsets_raw)
             for sdata in set_data:
                 f.write(sdata)
+            if extra_data:
+                f.write(extra_data)
         return self
 
     def pack(self):
