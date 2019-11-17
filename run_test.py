@@ -11,7 +11,17 @@ from j2a import J2A
 
 if sys.version_info[0] <= 2:
     input = raw_input
-
+    if isinstance(__builtins__, dict):  # Needed for cProfile with Python 2
+        class BuiltinsWrapper(object):
+            def __getattr__(self, arg):
+                return __builtins__[arg]
+            def __setattr__(self, arg, val):
+                __builtins__[arg] = val
+        builtins = BuiltinsWrapper()
+    else:
+        builtins = __builtins__
+else:
+    import builtins
 
 def _read_hdr():
     global anims, anims_path
@@ -20,6 +30,32 @@ def _read_hdr():
     else:
         print("Reading animations file", anims_path)
         return J2A(anims_path).read()
+
+_original_open = open
+
+def _open_mock(filename, mode):
+    import io
+    if filename.startswith("TEST"):
+        assert(mode in ("rb", "wb"))
+        if mode == "rb":
+            retval = _setup_pseudo_io.outputs[filename]
+            retval.seek(0)
+        else:  # mode == "wb"
+            retval = io.BytesIO()
+            retval.close = lambda : None  # Closing a BytesIO object destroys the buffer
+            _setup_pseudo_io.outputs[filename] = retval
+        return retval
+    else:
+        return _original_open(filename, mode)
+
+def _setup_pseudo_io(restore=False):
+    if restore:
+        builtins.open = _original_open
+    else:
+        builtins.open = _open_mock
+_setup_pseudo_io.outputs = {}
+
+#############################################################################################################
 
 def show_frame(set_num, anim_num, frame_num):
     try:
@@ -118,20 +154,9 @@ def stress_test():
                 anims.render_pixelmap(frame)
 
 def writing_test():
-    import io
     anims = _read_hdr()
     anims.unpack()
-    my_out = io.BytesIO()
-    my_out.close = lambda : None
-    def open_mock(filename, mode):
-        assert(filename == "TEST" and mode in ("rb", "wb"))
-        my_out.seek(0)
-        return my_out
-    if sys.version_info[0] <= 2:
-        __builtins__.open = open_mock
-    else:
-        import builtins
-        builtins.open = open_mock
+    _setup_pseudo_io()
     anims.write("TEST")
     anims2 = J2A("TEST").read().unpack()
 
@@ -139,7 +164,7 @@ def unpacking_test():
     anims = _read_hdr()
     anims.unpack()
 
-def packing_test():
+def repacking_test():
     anims = _read_hdr()
     pristine_chunks = [s._chunks for s in anims.sets]
     anims.unpack().pack()
@@ -152,6 +177,15 @@ def packing_test():
                 print("Difference in set %d, chunk %d" % (i, chunk_num))
                 failed = True
     print("Packing test", "FAILED" if failed else "PASSED")
+
+def full_cicle():
+    anims = _read_hdr()
+    for s in anims.sets:
+        for anim in s.animations:
+            for frame in anim.frames:
+                frame.decode_image()
+    _setup_pseudo_io()
+    anims.write("TEST")
 
 def _random_pixmap(seed=None, width=260, height=80):
     import numpy as np
@@ -200,16 +234,16 @@ def mask_autogen_test(times = 1):
         print(mask.hex())
         raise
 
-def profile_func(funcname, arg, *pargs):
+def profile_func(funcname, mode, *pargs):
     '''
-    Call function repeatedly according to the condition specified by `arg`.
+    Call function repeatedly according to the condition specified by `mode`.
     `funcname` specifies the name of the function in the global namespace to call.
-    `arg` must be a string of one of the following types:
+    `mode` must be a string of one of the following types:
      - "#x", where # is an integer; this calls the function # times
      - "#s", where # is an integer; this calls the function for at least # seconds
     The function is called with `*pargs` positional arguments.
     This function is useful for profiling from the command line with a command such as:
-    > python -m cProfile run_test.py profile_stress_test <arg>
+    > python -m cProfile run_test.py profile_func <funcname> <mode> <args...>
     Optionally you can add `-o <file>` after "cProfile" to save the results to a file.
     Afterwards, to view it use:
     > python -m pstats <file>
@@ -218,12 +252,12 @@ def profile_func(funcname, arg, *pargs):
     global fmap
     f = fmap[funcname]
     startingtime = time()
-    if arg[-1] == "x":
-        arg = int(arg[:-1])
-        condition = lambda i,t : i < arg
-    elif arg[-1] == "s":
-        arg = float(arg[:-1])
-        condition = lambda i,t : t <= arg
+    if mode[-1] == "x":
+        mode = int(mode[:-1])
+        condition = lambda i,t : i < mode
+    elif mode[-1] == "s":
+        mode = float(mode[:-1])
+        condition = lambda i,t : t <= mode
     else:
         raise KeyError
 
@@ -233,7 +267,7 @@ def profile_func(funcname, arg, *pargs):
             f(*pargs)
             curtime = time()
         else:
-            print("Running for {:.3} s, {} iterations".format(curtime-startingtime, i))
+            print("Running for {:.3f} s, {} iterations".format(curtime-startingtime, i))
             return
 
 #############################################################################################################

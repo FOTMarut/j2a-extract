@@ -2,6 +2,7 @@ import re
 import struct
 
 class NamedStruct(struct.Struct):
+    __slots__ = ["_names"]
     _fmtvalidate = re.compile(r"^((\d+[sp]|[xcbB?hHiIlLqQnNefd])\|\w+/)*(\d+[sp]|[xcbB?hHiIlLqQnNefd])\|\w+$")
 
     def __init__(self, fmt):

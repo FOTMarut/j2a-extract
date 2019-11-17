@@ -17,6 +17,9 @@ import misc
 
 if sys.version_info[0] < 3:
     zip = itertools.izip
+    as_compressible = lambda x : bytes(x)
+else:
+    as_compressible = lambda x : x
 
 # From the official Python docs
 def pairwise(iterable):
@@ -41,10 +44,8 @@ def raising_function(string, exception):
     raise exception(string)
 
 
-# TODO: add __slots__ definitions
-# TODO: use bytearray instead of array.array
-# TODO: add raise from clauses
 class J2A:
+    __slots__ = ["sets", "filename", "config", "palette", "palettesequence"]
     _Header = misc.NamedStruct("4s|signature/L|magic/L|headersize/h|version/h|unknown/L|filesize/L|crc32/L|setcount")
     _defaultconfig = {"palette": "Diamondus_2.pal", "compress_method": 9, "null_image": "error", "null_mask": "ignore",
         "fake_size_and_crc": None, "empty_set": None}
@@ -61,6 +62,7 @@ class J2A:
         pass
 
     class Set(object):
+        __slots__ = ["_chunks", "_samplecount", "samplesbaseindex", "_anims", "_samples"]
         _Header = misc.NamedStruct("4s|signature/B|animcount/B|samplecount/h|framecount/l|priorsamplecount/l|c1/l|u1/l|c2/l|u2/l|c3/l|u3/l|c4/l|u4")
 
         def __init__(self, *pargs, **kwargs):
@@ -127,16 +129,17 @@ class J2A:
         @staticmethod
         def _compress(animinfo, frameinfo, imagedata, sampledata, config):
             compress_method = config["compress_method"]
+            udata = (animinfo, frameinfo, imagedata, sampledata)
 
             if isinstance(compress_method, int):
-                return [(zlib.compress(c, compress_method), len(c)) for c in (animinfo, frameinfo, imagedata, sampledata)]
+                return [(zlib.compress(as_compressible(c), compress_method), len(c)) for c in udata]
 
             def compress_ext(raw, *pargs):
                 c_obj = zlib.compressobj(*pargs)
-                return c_obj.compress(raw) + c_obj.flush()
+                return c_obj.compress(as_compressible(raw)) + c_obj.flush()
 
             if isinstance(compress_method, tuple):
-                return [(compress_ext(c, *compress_method), len(c)) for c in (animinfo, frameinfo, imagedata, sampledata)]
+                return [(compress_ext(c, *compress_method), len(c)) for c in udata]
             elif compress_method == "fastest_model":
                 return [(compress_ext(c, *method), len(c)) for c, method in (
                     (animinfo,   (9, zlib.DEFLATED, zlib.MAX_WBITS, 9)),
@@ -180,10 +183,10 @@ class J2A:
                     {"framecount": len(a.frames), "fps": a.fps, "reserved": 0} for a in self._anims
                 )
                 l_frameinfo = []
-                img_data, mask_data = b'', b''
+                img_data, mask_data = bytearray(), bytearray()
                 null_pixmaps = null_masks = 0
-                for an,a in enumerate(self._anims):
-                    for fn,f in enumerate(a.frames):
+                for anim in self._anims:
+                    for f in anim.frames:
                         f.encode_image()
                         no_pixmap, no_mask = (f._rle_encoded_pixmap is None, f.mask is None)
                         l_frameinfo.append(f._get_header(
@@ -213,6 +216,7 @@ class J2A:
                     maskoffset = frame_info["maskoffset"]
                     frame_info["maskoffset"] = maskoffset + img_length if maskoffset != -1 else -1
                 frameinfo = J2A.Frame._Header.iter_pack(l_frameinfo)
+
                 sampledata = b''.join(self._samples)
                 self._samplecount = len(self._samples)
 
@@ -232,6 +236,7 @@ class J2A:
 
 
     class Animation:
+        __slots__ = ["frames", "fps"]
         _Header = misc.NamedStruct("H|framecount/H|fps/l|reserved")
 
         def __init__(self, frames=None, fps=10):
@@ -241,6 +246,7 @@ class J2A:
 
 
     class Frame:
+        __slots__ = ["shape", "origin", "coldspot", "gunspot", "_pixmap", "mask", "_rle_encoded_pixmap", "tagged"]
         _Header = misc.NamedStruct("H|width/H|height/h|coldspotx/h|coldspoty/h|hotspotx/h|hotspoty/h|gunspotx/h|gunspoty/l|imageoffset/l|maskoffset")
 
         def __init__(self, shape=None, origin=None, coldspot=None, gunspot=None, pixmap=None, mask=None, rle_encoded_pixmap=None, tagged=False):
@@ -248,7 +254,7 @@ class J2A:
             self.shape, self.origin, self.coldspot, self.gunspot, self.mask, self.tagged = shape, origin, coldspot, gunspot, mask, tagged
             if not rle_encoded_pixmap is None:
                 assert(not shape is None)
-                self._rle_encoded_pixmap = rle_encoded_pixmap
+                self._rle_encoded_pixmap = bytearray(rle_encoded_pixmap)
             elif isinstance(pixmap, Image.Image):
                 assert(shape is None or shape == pixmap.size)
                 self.shape = pixmap.size
@@ -284,7 +290,7 @@ class J2A:
         def decode_image(self):
             if not hasattr(self, "_pixmap"):
                 width, height = self.shape
-                raw = array.array("B", self._rle_encoded_pixmap)
+                raw = self._rle_encoded_pixmap
                 #prepare pixmap
                 pixmap = [[0]*width for _ in range(height)]
                 #fill it with data! (image format parser)
@@ -313,10 +319,10 @@ class J2A:
 
         def encode_image(self):
             if not hasattr(self, "_rle_encoded_pixmap"):
-                encoded = array.array("B")
+                encoded = bytearray()
                 for row in self._pixmap:
                     while True:
-                        row = bytes(row)
+                        row = bytearray(row)
                         length = len(row)
                         row = row.lstrip(b'\x00')
                         if not row:
@@ -332,11 +338,11 @@ class J2A:
                         while length:
                             m = min(length, 0x7f)
                             encoded.append(m ^ 0x80)
-                            encoded += array.array("B", row[:m])
+                            encoded += row[:m]
                             row = row[m:]
                             length -= m
                     encoded.append(0x80)
-                self._rle_encoded_pixmap = bytes(encoded)
+                self._rle_encoded_pixmap = encoded
                 del self._pixmap
             return self
 
@@ -346,7 +352,7 @@ class J2A:
             pix_iter = itertools.chain(*self._pixmap)
             for i in range(len(mask)):
                 mask[i] = sum(bool(pix) << j for j, pix in enumerate(take(8, pix_iter)))
-            self.mask = bytes(mask)
+            self.mask = mask
             return self
 
     def __init__(self, filename=None, **kwargs):
