@@ -1,8 +1,8 @@
 # J2A-extract
 Jazz Jackrabbit 2 Anims.j2a file extractor and importer for Python 2 and 3
 
-Created by Stijn and VioletCLM, modified by Marut.
-Compatible with Python 2.7+ and Python 3.0+
+Created by Stijn and VioletCLM; refactoring and OO interface by Marut.
+Compatible with Python 2.6+ and Python 3.0+
 
 ## Usage
 

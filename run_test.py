@@ -55,6 +55,28 @@ def _setup_pseudo_io(restore=False):
         builtins.open = _open_mock
 _setup_pseudo_io.outputs = {}
 
+def _assert_equal_anims(anims1, anims2):
+    assert(isinstance(anims1, J2A))
+    assert(isinstance(anims2, J2A))
+    assert(len(anims1.sets) == len(anims2.sets))
+    for set1, set2 in zip(anims1.sets, anims2.sets):
+        set1.unpack(), set2.unpack()
+        assert(len(set1.animations) == len(set2.animations))
+        assert(len(set1._samples)   == len(set2._samples))
+        for anim1, anim2 in zip(set1.animations, set2.animations):
+            assert(anim1.fps         == anim2.fps)
+            assert(len(anim1.frames) == len(anim2.frames))
+            for frame1, frame2 in zip(anim1.frames, anim2.frames):
+                frame1.encode_image(), frame2.encode_image()
+                for fprop in ("shape", "origin", "coldspot", "gunspot", "_rle_encoded_pixmap", "tagged"):
+                    assert(getattr(frame1, fprop) == getattr(frame2, fprop))
+                if frame1.mask != frame2.mask:
+                    for mask in (frame1.mask, frame2.mask):
+                        assert(mask is None or not any(mask))
+        for samp1, samp2 in zip(set1._samples, set2._samples):
+            assert(samp1 == samp2)
+#                         assert(pixmap is None or not any(any(row) for row in pixmap))
+
 #############################################################################################################
 
 def show_frame(set_num, anim_num, frame_num):
@@ -107,12 +129,12 @@ def show_anim(set_num, anim_num):
 def print_j2a_stats():
     anims = _read_hdr()
     print("Jazz Jackrabbit 2 animations file")
-    print("\tsetcount: {}".format(len(anims.sets)))
+    print("\tsetcount: {0}".format(len(anims.sets)))
     for i,s in enumerate(anims.sets):
-        print("\tSet {}:".format(i))
-        print("\t\tanimcount: {}".format(len(s.animations)))
-        print("\t\tsamplecount: {}".format(s._samplecount))
-        print("\t\tframecount: {}".format(sum(len(a.frames) for a in s.animations)))
+        print("\tSet {0}:".format(i))
+        print("\t\tanimcount: {0}".format(len(s.animations)))
+        print("\t\tsamplecount: {0}".format(s._samplecount))
+        print("\t\tframecount: {0}".format(sum(len(a.frames) for a in s.animations)))
 
 def generate_compmethod_stats(filename, starting_set=0):
     l_level = list(range(1, 10))
@@ -178,7 +200,7 @@ def repacking_test():
                 failed = True
     print("Packing test", "FAILED" if failed else "PASSED")
 
-def full_cicle():
+def full_cycle():
     anims = _read_hdr()
     for s in anims.sets:
         for anim in s.animations:
@@ -186,6 +208,17 @@ def full_cicle():
                 frame.decode_image()
     _setup_pseudo_io()
     anims.write("TEST")
+
+def full_cycle_test():
+    anims1 = _read_hdr()
+    for s in anims1.sets:
+        for anim in s.animations:
+            for frame in anim.frames:
+                frame.decode_image()
+    _setup_pseudo_io()
+    anims1.write("TEST")
+    anims2 = J2A("TEST").read()
+    _assert_equal_anims(anims1, anims2)
 
 def _random_pixmap(seed=None, width=260, height=80):
     import numpy as np
@@ -267,13 +300,13 @@ def profile_func(funcname, mode, *pargs):
             f(*pargs)
             curtime = time()
         else:
-            print("Running for {:.3f} s, {} iterations".format(curtime-startingtime, i))
+            print("Running for {0:.3f} s, {1} iterations".format(curtime-startingtime, i))
             return
 
 #############################################################################################################
 
 if __name__ == "__main__":
-    fmap = {k: v for k,v in globals().items() if isinstance(v, FunctionType) and not k.startswith('_')}
+    fmap = dict((k, v) for k,v in globals().items() if isinstance(v, FunctionType) and not k.startswith('_'))
 
     assert(int(True) is 1)
     isint = lambda x : x[int(x[:1] in '+-'):].isdigit()
@@ -289,7 +322,7 @@ if __name__ == "__main__":
             fargs.append(arg)
     anims_path = anims_path or os.path.join(os.path.dirname(sys.argv[0]), "Anims.j2a")
 
-    print("Calling {} with arguments: {}".format(sys.argv[1], fargs))
+    print("Calling {0} with arguments: {1}".format(sys.argv[1], fargs))
     retval = fmap[sys.argv[1]](*fargs)
     if isinstance(retval, int):
         sys.exit(retval)

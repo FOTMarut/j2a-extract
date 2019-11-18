@@ -49,7 +49,6 @@ class RIFFChunk(object):
             if cut_offset > len(data):
                 debug_print("# Bailing on step 2")
                 break
-#             chunks.append(RIFFChunk(name, data[Header.size:cut_offset], staticdata=staticdata))
             chunks.append(RIFFChunk(name, [], data[Header.size:cut_offset], staticdata=staticdata))
             data = data[cut_offset:]
             debug_print("# 3)", len(data), ">=", Header.size)
@@ -72,7 +71,7 @@ def test_RIFF(filename):
         riff_c.subchunks, riff_c.raw = RIFFChunk.collector(riff_c.raw)
 
     def dump_chunks(chunk, indent=0):
-        print("{}Chunk '{}': {} subchunks, sdata {}, slack of length {}; slack: {}"
+        print("{0}Chunk '{1}': {2} subchunks, sdata {3}, slack of length {4}; slack: {5}"
             .format("\t" * indent, chunk.name.decode(), len(chunk.subchunks), chunk.staticdata, hex(len(chunk.raw)), chunk.raw))
         for c in chunk.subchunks:
             dump_chunks(c, indent + 1)
@@ -102,17 +101,14 @@ def dump_samples(folder):
         os.makedirs(folder)
 
     for set_num,s in enumerate(anims.sets):
-        set_folder = "{}/{:03}".format(folder, set_num)
+        set_folder = "{0}/{1:03}".format(folder, set_num)
         if not os.path.exists(set_folder):
             os.mkdir(set_folder)
         for sample_num,raw in enumerate(s._samples):
             sample = S_Header.unpack_from(raw)
             sample_data = raw[S_Header.size:(S_Header.size + sample["sc_data_size"])]
-            with wave.open("{}/{:03}.wav".format(set_folder, sample_num), "wb") as w:
+            with wave.open("{0}/{1:03}.wav".format(set_folder, sample_num), "wb") as w:
                 w.setparams((1, 1, sample["sc_sample_rate"], len(sample_data), "NONE", "not compressed"))
-#                 w.setnchannels(1)
-#                 w.setsampwidth(1)
-#                 w.setframerate(sample["sc_sample_rate"])
                 w.writeframes(bytes(b ^ 0x80 for b in sample_data))
 
 class PyAudioSoundPlayer(object):
@@ -127,7 +123,7 @@ class PyAudioSoundPlayer(object):
         self._p.terminate()
         return False
 
-    def play(self, *pargs, format, nchannels, framerate, verbose=True, **kwargs):
+    def play(self, format, nchannels, framerate, verbose=True, *pargs, **kwargs):
         import pyaudio
         if kwargs:
             print("Warning: ignored extra keyword arguments:", *kwargs)
@@ -212,10 +208,10 @@ def sample_console():
                 s_old = s
 
                 l = s.split()
-                set_num, sample_num, *sample_rate = l
-                assert(len(sample_rate) <= 1)
-                sample_rate = sample_rate or (1.0, )
-                _play_sample(audio_out, anims, set_num, sample_num, sample_rate[0])
+                assert(len(l) <= 3)
+                set_num, sample_num = l[:2]
+                sample_rate = ( l[2:3] or (1.0,) )[0]
+                _play_sample(audio_out, anims, set_num, sample_num, sample_rate)
             except EOFError:
                 print()
                 return
@@ -243,34 +239,34 @@ def print_sample_statistics():
             sample_data = raw[S_Header.size:(S_Header.size + sample["sc_data_size"])]
             asample = np.frombuffer(sample_data, dtype=np.int8)
             s1, s2a, s2b = func(asample), func(asample[1::2]), func(asample[0::2])
-            print("Set {:3} sample {:3}: {:8.3f}  {:8.3f}  {:8.3f}  - {:8.2%} {:8.2%}".format(
+            print("Set {0:3} sample {1:3}: {2:8.3f}  {3:8.3f}  {4:8.3f}  - {5:8.2%} {6:8.2%}".format(
                 set_num, sample_num,
                 s1, s2a, s2b,
                 s1/s2a, s1/s2b
             ))
 
 def dump_samples_data_slice(filename, start, size=0x20):
-    import os
-
     anims = _read_hdr().unpack()
     start = start if isinstance(start, int) else int(start, 0)
     size  = size  if isinstance(size,  int) else int(size,  0)
     nsegs = (size - 1) // 4 + 1
-    fmt_str = "{:3} {:3} -" + " {}" * nsegs
+    fmt_str = "{0:3} {1:3} -" + (" {%d}" * nsegs) % tuple(range(2, nsegs+2))
     interv = (start, start + 4*nsegs, 4)
+    to_hex = lambda x : ("%02x" * len(x)) % tuple(x)
     with open(filename, "w") as f:
-        print(("        -" + " {:<8}" * nsegs).format(*(hex(i) for i in range(*interv))), file=f)
+        print("        -" + (" %-8x" * nsegs) % tuple(range(*interv)), file=f)
         for set_num,s in enumerate(anims.sets):
             for sample_num,raw in enumerate(s._samples):
+                raw = bytearray(raw)
                 print(fmt_str.format(
                     set_num, sample_num,
-                    *(raw[i:i+4].hex() for i in range(*interv))
+                    *(to_hex(raw[i:i+4]) for i in range(*interv))
                 ), file=f)
 
 #############################################################################################################
 
 if __name__ == "__main__":
-    fmap = {k: v for k,v in globals().items() if isinstance(v, FunctionType) and not k.startswith('_')}
+    fmap = dict((k, v) for k,v in globals().items() if isinstance(v, FunctionType) and not k.startswith('_'))
 
     assert(int(True) is 1)
     isint = lambda x : x[int(x[:1] in '+-'):].isdigit()
@@ -286,7 +282,7 @@ if __name__ == "__main__":
             fargs.append(arg)
     anims_path = anims_path or os.path.join(os.path.dirname(sys.argv[0]), "Anims.j2a")
 
-    print("Calling {} with arguments: {}".format(sys.argv[1], fargs))
+    print("Calling {0} with arguments: {1}".format(sys.argv[1], fargs))
     retval = fmap[sys.argv[1]](*fargs)
     if isinstance(retval, int):
         sys.exit(retval)

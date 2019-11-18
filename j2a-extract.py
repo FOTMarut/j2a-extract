@@ -27,7 +27,7 @@ def main():
                 frameid = str(framenum)
                 if frame.tagged:
                     frameid += "t"
-                imgfilename = os.path.join(dirname, "{:s},{:d},{:d},{:d},{:d},{:d},{:d}.png".format(
+                imgfilename = os.path.join(dirname, "{0:s},{1:d},{2:d},{3:d},{4:d},{5:d},{6:d}.png".format(
                     frameid,
                     *frame.origin +
                      frame.coldspot +
