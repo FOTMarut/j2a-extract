@@ -74,7 +74,8 @@ def _assert_equal_anims(anims1, anims2):
                     for mask in (frame1.mask, frame2.mask):
                         assert(mask is None or not any(mask))
         for samp1, samp2 in zip(set1._samples, set2._samples):
-            assert(samp1 == samp2)
+            for sprop in ("_data", "_rate", "volume", "_bits", "_channels", "loop"):
+                assert(getattr(samp1, sprop) == getattr(samp2, sprop))
 #                         assert(pixmap is None or not any(any(row) for row in pixmap))
 
 #############################################################################################################
@@ -219,6 +220,7 @@ def full_cycle_test():
     anims1.write("TEST")
     anims2 = J2A("TEST").read()
     _assert_equal_anims(anims1, anims2)
+    print("Test PASSED")
 
 def _random_pixmap(seed=None, width=260, height=80):
     import numpy as np
@@ -266,6 +268,29 @@ def mask_autogen_test(times = 1):
         print(pixmap)
         print(mask.hex())
         raise
+
+def sample_serializing_test():
+    anims = _read_hdr()
+    for set_num, s in enumerate(anims.sets):
+        samplesdata = bytearray(zlib.decompress(s._chunks[3][0], zlib.MAX_WBITS, s._chunks[3][1]))
+        hdr_size = J2A.Sample._Header.size
+        s.unpack()
+        for sample_num, sample in enumerate(s._samples):
+            newsampledata = sample.serialize()
+            re_sample, _ = J2A.Sample.read(newsampledata, 0)
+            for sprop in J2A.Sample.__slots__:
+                assert(getattr(re_sample, sprop) == getattr(sample, sprop)), "Matching failed on set %d, frame %d" % (set_num, sample_num)
+            # The "reserved2" field is dropped, even though it is not always zero in retail Anims.j2a:
+            samplesdata[hdr_size-4:hdr_size] = b'\x00\x00\x00\x00'
+            try:
+                assert(samplesdata.startswith(newsampledata)), "Matching failed on set %d, frame %d" % (set_num, sample_num)
+            except:
+                for offset in range(0, len(newsampledata), 0x40):
+                    print(  samplesdata[offset:offset+0x40].hex())
+                    print(newsampledata[offset:offset+0x40].hex(), end='\n\n')
+                raise
+            samplesdata = samplesdata[len(newsampledata):]
+    print("Test SUCCESSFUL")
 
 def profile_func(funcname, mode, *pargs):
     '''

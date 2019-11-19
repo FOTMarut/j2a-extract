@@ -116,9 +116,10 @@ class J2A:
                 self._samples = []
                 offset, length = 0, len(sampledata)
                 while offset < length:
-                    size = struct.unpack_from("<L", sampledata, offset)[0]
-                    self._samples.append(sampledata[offset:offset+size])
-                    offset += size
+                    sample, offset = J2A.Sample.read(sampledata, offset)
+                    if sample is None:
+                        break
+                    self._samples.append(sample)
                 if len(self._samples) != self._samplecount:
                     print("Warning: internal sample miscount (expected: %d, got: %d)" % (self._samplecount, len(self._samples)), file=sys.stderr)
 
@@ -188,6 +189,9 @@ class J2A:
                 for anim in self._anims:
                     for f in anim.frames:
                         f.encode_image()
+
+                for anim in self._anims:
+                    for f in anim.frames:
                         no_pixmap, no_mask = (f._rle_encoded_pixmap is None, f.mask is None)
                         l_frameinfo.append(f._get_header(
                             -1 if no_pixmap else len(img_data),
@@ -217,7 +221,7 @@ class J2A:
                     frame_info["maskoffset"] = maskoffset + img_length if maskoffset != -1 else -1
                 frameinfo = J2A.Frame._Header.iter_pack(l_frameinfo)
 
-                sampledata = b''.join(self._samples)
+                sampledata = b''.join(sample.serialize() for sample in self._samples)
                 self._samplecount = len(self._samples)
 
                 self._chunks = J2A.Set._compress(animinfo, frameinfo, img_data + mask_data, sampledata, config)
@@ -235,7 +239,7 @@ class J2A:
             raise NotImplementedError #TODO
 
 
-    class Animation:
+    class Animation(object):
         __slots__ = ["frames", "fps"]
         _Header = misc.NamedStruct("H|framecount/H|fps/l|reserved")
 
@@ -245,7 +249,7 @@ class J2A:
             self.frames, self.fps = frames, fps
 
 
-    class Frame:
+    class Frame(object):
         __slots__ = ["shape", "origin", "coldspot", "gunspot", "_pixmap", "mask", "_rle_encoded_pixmap", "tagged"]
         _Header = misc.NamedStruct("H|width/H|height/h|coldspotx/h|coldspoty/h|hotspotx/h|hotspoty/h|gunspotx/h|gunspoty/l|imageoffset/l|maskoffset")
 
@@ -354,6 +358,68 @@ class J2A:
                 mask[i] = sum(bool(pix) << j for j, pix in enumerate(take(8, pix_iter)))
             self.mask = mask
             return self
+
+    class Sample(object):
+        __slots__ = ["_data", "_rate", "volume", "_bits", "_channels", "loop"]
+        _Header = misc.NamedStruct("L|total_size/4s|riff_id/L|riff_size/4s|format/4s|sc_id/L|sc_size/L|reserved1_size/32s|reserved1/H|unknown1/h|volume/H|flags/H|unknown2/L|nsamples/L|loop_start/L|loop_end/L|sample_rate/L|has_appendix/L|reserved2")
+        _header_defaults = {"riff_id": b'RIFF', "format": b'AS  ', "sc_id": b'SAMP', "reserved1_size": 0x40, "reserved1": b'\x00' * 0x40, "unknown1": 0x4000, "unknown2": 0x0080, "has_appendix": 0, "reserved2": 0}
+
+        def __init__(self, data, sample_rate=None, volume=None, bits=8, channels=1, loop=None):
+            assert(not sample_rate is None and not volume is None)
+            assert(isinstance(data, (bytes, bytearray)))
+            self._data, self._rate, self.volume, self._bits, self._channels, self.loop = \
+                data, sample_rate, volume, bits, channels, loop
+
+        @staticmethod
+        def read(raw, offset):
+            try:
+                header = J2A.Sample._Header.unpack_from(raw, offset)
+            except:
+                if not any(raw[offset:]):
+                    return None, offset
+                else:
+                    raise
+
+            is_16bit  = bool(header["flags"] & 0x4)
+            is_stereo = bool(header["flags"] & 0x40)
+            loop      = (header["loop_start"], header["loop_end"], bool(header["flags"] & 0x10)) if header["flags"] & 0x18 else None
+            sample_data_size = header["nsamples"] * (1 + is_16bit) * (1 + is_stereo)
+            sample_data_offset = offset + J2A.Sample._Header.size + (0 if not header["has_appendix"] else 0x9e)
+
+            assert \
+                (header["riff_id"], header["format"], header["sc_id"]) == (b'RIFF', b'AS  ', b'SAMP'), \
+                "signatures mismatch"
+            assert(header["total_size"] - header["riff_size"] == 0xc),                    "sizes mismatch"
+            assert((header["total_size"] - header["sc_size"]) & -2 == 0x18),              "sizes mismatch"
+            assert(header["reserved1_size"] == 0x40),                                     "sizes mismatch"
+            assert(header["sc_size"] == sample_data_size + 0x44),                         "sizes mismatch"
+            if any(header["reserved1"]):
+                print("Warning: found nonzero sample reserved area")
+
+            sample_data = raw[sample_data_offset:sample_data_offset + sample_data_size]
+
+            sample = J2A.Sample(sample_data,
+                bits = (1 + is_16bit) * 8,
+                channels = 1 + is_stereo,
+                loop = loop,
+                volume = header["volume"],
+                sample_rate = header["sample_rate"]
+            )
+            return (sample, offset + header["total_size"])
+
+        def serialize(self):
+            header = J2A.Sample._header_defaults.copy()
+            datalen = len(self._data)
+            nsamples = datalen // ((self._bits >> 3) * self._channels)
+            total_size = (datalen + 0x5d) & -2
+            loop = self.loop or (0, 0, 0)
+            header.update(total_size = total_size, riff_size = total_size - 0xc, volume = self.volume, sc_size = datalen + 0x44,
+                flags = 0x4 * (self._bits == 16) + 0x8 * (not self.loop is None) + 0x10 * loop[2] + 0x40 * (self._channels == 2),
+                nsamples = nsamples, loop_start = loop[0], loop_end = loop[1], sample_rate = self._rate,
+            )
+            retval = J2A.Sample._Header.pack(**header) + self._data + b'\x00' * (datalen & 1)
+            assert(len(retval) == total_size)
+            return retval
 
     def __init__(self, filename=None, **kwargs):
         ''' initializes class, sets file name '''

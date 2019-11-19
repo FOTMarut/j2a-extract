@@ -79,18 +79,24 @@ def test_RIFF(filename):
     dump_chunks(mainchunk)
 
 S_Header = misc.NamedStruct(
-    "L|size/"           # 0x0  - 0x4
-    "4s|riff_id/"       # 0x4  - 0x8
-    "L|chunk_size/"     # 0x8  - 0xC
-    "4s|format/"        # 0xC  - 0x10
-    "4s|sc_id/"         # 0x10 - 0x14
-    "L|sc_size/"        # 0x14 - 0x18
-    "40s|sc_padding1/"  # 0x18 - 0x40
-    "4s|sc_unknown1/"   # 0x40 - 0x44
-    "L|sc_data_size/"   # 0x44 - 0x48
-    "8s|sc_unknown2/"   # 0x48 - 0x50
-    "L|sc_sample_rate/" # 0x50 - 0x54
-    "L|sc_unknown3"     # 0x54 - 0x58
+    "L|total_size/"      # 0x0  - 0x4  (inclusive)
+    "4s|riff_id/"        # 0x4  - 0x8  "RIFF"
+    "L|riff_size/"       # 0x8  - 0xC  total_size - 0xc (exclusive)
+    "4s|format/"         # 0xC  - 0x10 "AS  "
+    "4s|sc_id/"          # 0x10 - 0x14 "SAMP"
+    "L|sc_size/"         # 0x14 - 0x18 total_size - 0x18-19 (exclusive)
+    "L|reserved1_size/"  # 0x18 - 0x1C = 0x40
+    "32s|reserved1/"     # 0x1C - 0x3C zeros
+    "H|unknown1/"        # 0x3C - 0x3E = 0x4000
+    "h|volume/"          # 0x3E - 0x40 0 - 0x7fff
+    "H|flags/"           # 0x40 - 0x42 0x4 => 16-bit LE samples; 0x8 => loop; 0x10 => BiDi loop; 0x40 => stereo
+    "H|unknown2/"        # 0x42 - 0x44 = 0x0080
+    "L|nsamples/"        # 0x44 - 0x48
+    "L|loop_start/"      # 0x48 - 0x4C
+    "L|loop_end/"        # 0x4C - 0x50
+    "L|sample_rate/"     # 0x50 - 0x54
+    "L|has_appendix/"    # 0x54 - 0x58 if != 0, 0x9e additional bytes in header
+    "L|reserved2"        # 0x58 - 0x5C
 )
 def dump_samples(folder):
     import os
@@ -104,12 +110,10 @@ def dump_samples(folder):
         set_folder = "{0}/{1:03}".format(folder, set_num)
         if not os.path.exists(set_folder):
             os.mkdir(set_folder)
-        for sample_num,raw in enumerate(s._samples):
-            sample = S_Header.unpack_from(raw)
-            sample_data = raw[S_Header.size:(S_Header.size + sample["sc_data_size"])]
+        for sample_num,sample in enumerate(s._samples):
             with wave.open("{0}/{1:03}.wav".format(set_folder, sample_num), "wb") as w:
-                w.setparams((1, 1, sample["sc_sample_rate"], len(sample_data), "NONE", "not compressed"))
-                w.writeframes(bytes(b ^ 0x80 for b in sample_data))
+                w.setparams((sample._channels, sample._channels * sample._bits // 8, sample._rate, len(sample._data), "NONE", "not compressed"))
+                w.writeframes(bytes(b ^ 0x80 for b in sample._data))
 
 class PyAudioSoundPlayer(object):
     def __init__(self):
@@ -123,7 +127,7 @@ class PyAudioSoundPlayer(object):
         self._p.terminate()
         return False
 
-    def play(self, format, nchannels, framerate, verbose=True, *pargs, **kwargs):
+    def play(self, samples, format, nchannels, framerate, verbose=True, **kwargs):
         import pyaudio
         if kwargs:
             print("Warning: ignored extra keyword arguments:", *kwargs)
@@ -134,7 +138,9 @@ class PyAudioSoundPlayer(object):
                               channels=nchannels,
                               rate=framerate,
                               output=True)
-        for s in pargs:
+        if isinstance(samples, (bytes, bytearray)):
+            samples = (samples, )
+        for s in samples:
             stream.write(s)
         stream.write(b'\x00' * 8000)  # Some silence, to avoid early cutting off
         stream.stop_stream()
@@ -149,9 +155,9 @@ def _play_sample(audio_out, anims, set_num, sample_num, sample_rate):
             sample_rate = int(sample_rate)
 
     if isinstance(sample_rate, int):
-        get_rate = lambda s : sample_rate
+        get_rate = lambda rate : sample_rate
     else:
-        get_rate = lambda s : int(s["sc_sample_rate"] * sample_rate)
+        get_rate = lambda rate : int(rate * sample_rate)
 
     if sample_num != "*":  # Expects an int-like
         sample_num = int(sample_num)
@@ -161,14 +167,11 @@ def _play_sample(audio_out, anims, set_num, sample_num, sample_rate):
 
     for i in sample_list:
         print("Set %d, sample %d" % (int(set_num), i))
-        raw = s._samples[i]
-        sample = S_Header.unpack_from(raw)
-        sample_data = raw[S_Header.size:(S_Header.size + sample["sc_data_size"])]
-
-        RATE = int(sample["sc_sample_rate"])
-        print("Reported sampling rate:", sample["sc_sample_rate"])
-
-        audio_out.play(sample_data, nchannels=1, framerate=get_rate(sample), format="Int8")
+        sample = s._samples[i]
+        is_16bit  = bool(sample._bits == 16)
+        rate = sample._rate
+        print("Reported sampling rate:", rate)
+        audio_out.play(sample._data, nchannels = sample._channels, framerate = get_rate(rate), format = ("Int8", "Int16")[is_16bit])
 
 def play_sample(set_num, sample_num, sample_rate=1.0):
     '''
@@ -223,29 +226,10 @@ def sample_console():
                 continue
             except Exception as e:
                 print("Invalid command line:", s)
-                print("The following exception was thrown:", e)
+                print("The following exception was thrown:", str(type(e)) + ":", e)
                 continue
 
-def print_sample_statistics():
-    import numpy as np
-    def func(x):
-        return np.var(x[1:] - x[:-1], ddof=1)
-
-    anims = _read_hdr()
-    for set_num,s in enumerate(anims.sets):
-        s.unpack()
-        for sample_num,raw in enumerate(s._samples):
-            sample = S_Header.unpack_from(raw)
-            sample_data = raw[S_Header.size:(S_Header.size + sample["sc_data_size"])]
-            asample = np.frombuffer(sample_data, dtype=np.int8)
-            s1, s2a, s2b = func(asample), func(asample[1::2]), func(asample[0::2])
-            print("Set {0:3} sample {1:3}: {2:8.3f}  {3:8.3f}  {4:8.3f}  - {5:8.2%} {6:8.2%}".format(
-                set_num, sample_num,
-                s1, s2a, s2b,
-                s1/s2a, s1/s2b
-            ))
-
-def dump_samples_data_slice(filename, start, size=0x20):
+def dump_samples_data_slice(filename, start=0, size=0x20):
     anims = _read_hdr().unpack()
     start = start if isinstance(start, int) else int(start, 0)
     size  = size  if isinstance(size,  int) else int(size,  0)
