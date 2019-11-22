@@ -6,7 +6,7 @@ class NamedStruct(struct.Struct):
     _fmtvalidate = re.compile(r"^((\d+[sp]|[xcbB?hHiIlLqQnNefd])\|\w+/)*(\d+[sp]|[xcbB?hHiIlLqQnNefd])\|\w+$")
 
     def __init__(self, fmt):
-        assert(NamedStruct._fmtvalidate.match(fmt))
+        assert NamedStruct._fmtvalidate.match(fmt)
         pairs = [it.split("|", 1) for it in fmt.split("/")]
         self._names = tuple(p[1] for p in pairs)
         super(NamedStruct, self).__init__("<" + "".join(p[0] for p in pairs))

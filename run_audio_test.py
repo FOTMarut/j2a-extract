@@ -33,7 +33,7 @@ class RIFFChunk(object):
     @staticmethod
     def collector(data, namesize=4, staticdatasize=0, inclusive_sizes=False):
         debug_print = print if staticdatasize else lambda *pargs, **kwargs : None
-        assert(isinstance(data, bytes))
+        assert isinstance(data, bytes)
         chunks = []
         Header = struct.Struct("<%dsL%ds" % (namesize, staticdatasize))
         debug_print("# Launching collector with header of size", Header.size)
@@ -62,12 +62,12 @@ def test_RIFF(filename):
     with open("temp/set0sampledata.raw", "rb") as f:
         samples_data = f.read()
     mainchunk = RIFFChunk(b'MAIN', *RIFFChunk.chunkify_buffer(samples_data))
-    assert(len(mainchunk.subchunks) > 0 and len(mainchunk.raw) == 0)
+    assert len(mainchunk.subchunks) > 0 and len(mainchunk.raw) == 0
     for i,c in enumerate(mainchunk.subchunks):
         c.subchunks, c.raw = RIFFChunk.collector(c.raw, 4, 4, False)
-        assert(len(c.subchunks) == 1 and len(c.raw) == 0)
+        assert len(c.subchunks) == 1 and len(c.raw) == 0
         riff_c = c.subchunks[0]
-        assert(riff_c.name == b'RIFF')
+        assert riff_c.name == b'RIFF'
         riff_c.subchunks, riff_c.raw = RIFFChunk.collector(riff_c.raw)
 
     def dump_chunks(chunk, indent=0):
@@ -110,7 +110,7 @@ def dump_samples(folder):
         set_folder = "{0}/{1:03}".format(folder, set_num)
         if not os.path.exists(set_folder):
             os.mkdir(set_folder)
-        for sample_num,sample in enumerate(s._samples):
+        for sample_num,sample in enumerate(s.samples):
             with wave.open("{0}/{1:03}.wav".format(set_folder, sample_num), "wb") as w:
                 w.setparams((sample._channels, sample._channels * sample._bits // 8, sample._rate, len(sample._data), "NONE", "not compressed"))
                 w.writeframes(bytes(b ^ 0x80 for b in sample._data))
@@ -146,7 +146,7 @@ class PyAudioSoundPlayer(object):
         stream.stop_stream()
 
 def _play_sample(audio_out, anims, set_num, sample_num, sample_rate):
-    s = anims.sets[int(set_num)].unpack()
+    s = anims.sets[int(set_num)]
 
     if isinstance(sample_rate, str):
         if sample_rate[:1] == '*':
@@ -163,11 +163,11 @@ def _play_sample(audio_out, anims, set_num, sample_num, sample_rate):
         sample_num = int(sample_num)
         sample_list = (sample_num, )
     else:
-        sample_list = range(len(s._samples))
+        sample_list = range(len(s.samples))
 
     for i in sample_list:
         print("Set %d, sample %d" % (int(set_num), i))
-        sample = s._samples[i]
+        sample = s.samples[i]
         is_16bit  = bool(sample._bits == 16)
         rate = sample._rate
         print("Reported sampling rate:", rate)
@@ -211,7 +211,7 @@ def sample_console():
                 s_old = s
 
                 l = s.split()
-                assert(len(l) <= 3)
+                assert len(l) <= 3
                 set_num, sample_num = l[:2]
                 sample_rate = ( l[2:3] or (1.0,) )[0]
                 _play_sample(audio_out, anims, set_num, sample_num, sample_rate)
@@ -240,7 +240,7 @@ def dump_samples_data_slice(filename, start=0, size=0x20):
     with open(filename, "w") as f:
         print("        -" + (" %-8x" * nsegs) % tuple(range(*interv)), file=f)
         for set_num,s in enumerate(anims.sets):
-            for sample_num,raw in enumerate(s._samples):
+            for sample_num,raw in enumerate(s.samples):
                 raw = bytearray(raw)
                 print(fmt_str.format(
                     set_num, sample_num,
@@ -252,7 +252,7 @@ def dump_samples_data_slice(filename, start=0, size=0x20):
 if __name__ == "__main__":
     fmap = dict((k, v) for k,v in globals().items() if isinstance(v, FunctionType) and not k.startswith('_'))
 
-    assert(int(True) is 1)
+    assert int(True) is 1
     isint = lambda x : x[int(x[:1] in '+-'):].isdigit()
 
     anims_path = None

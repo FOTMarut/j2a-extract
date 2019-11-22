@@ -2,7 +2,7 @@ from __future__ import print_function
 import os
 import sys
 import struct
-from j2a import J2A #http://www.jazz2online.com/junk/j2a.py
+from j2a import J2A
 
 if sys.version_info[0] <= 2:
     input = raw_input
@@ -10,8 +10,9 @@ if sys.version_info[0] <= 2:
 def main():
     animsfilename = sys.argv[1] if (len(sys.argv) >= 2) else \
         input("Please type the animsfilename of the .j2a file you wish to extract:\n")
+    outputdir = sys.argv[2] if (len(sys.argv) >= 3) else \
+        os.path.join(os.path.dirname(animsfilename), os.path.basename(animsfilename).replace('.', '-'))
     j2a = J2A(animsfilename).read()
-    outputdir = os.path.join(os.path.dirname(animsfilename), os.path.basename(animsfilename).replace('.', '-'))
     for setnum, s in enumerate(j2a.sets):
         s = j2a.sets[setnum]
         setdir = os.path.join(outputdir, str(setnum))

@@ -13,10 +13,8 @@ if sys.version_info[0] <= 2:
     input = raw_input
     if isinstance(__builtins__, dict):  # Needed for cProfile with Python 2
         class BuiltinsWrapper(object):
-            def __getattr__(self, arg):
-                return __builtins__[arg]
-            def __setattr__(self, arg, val):
-                __builtins__[arg] = val
+            __getattr__ = __builtins__.__getitem__
+            __setattr__ = __builtins__.__setitem__
         builtins = BuiltinsWrapper()
     else:
         builtins = __builtins__
@@ -36,7 +34,7 @@ _original_open = open
 def _open_mock(filename, mode):
     import io
     if filename.startswith("TEST"):
-        assert(mode in ("rb", "wb"))
+        assert mode in ("rb", "wb")
         if mode == "rb":
             retval = _setup_pseudo_io.outputs[filename]
             retval.seek(0)
@@ -56,27 +54,26 @@ def _setup_pseudo_io(restore=False):
 _setup_pseudo_io.outputs = {}
 
 def _assert_equal_anims(anims1, anims2):
-    assert(isinstance(anims1, J2A))
-    assert(isinstance(anims2, J2A))
-    assert(len(anims1.sets) == len(anims2.sets))
+    assert isinstance(anims1, J2A)
+    assert isinstance(anims2, J2A)
+    assert len(anims1.sets) == len(anims2.sets)
     for set1, set2 in zip(anims1.sets, anims2.sets):
-        set1.unpack(), set2.unpack()
-        assert(len(set1.animations) == len(set2.animations))
-        assert(len(set1._samples)   == len(set2._samples))
+        assert len(set1.animations) == len(set2.animations)
+        assert len(set1.samples)    == len(set2.samples)
         for anim1, anim2 in zip(set1.animations, set2.animations):
-            assert(anim1.fps         == anim2.fps)
-            assert(len(anim1.frames) == len(anim2.frames))
+            assert anim1.fps         == anim2.fps
+            assert len(anim1.frames) == len(anim2.frames)
             for frame1, frame2 in zip(anim1.frames, anim2.frames):
                 frame1.encode_image(), frame2.encode_image()
                 for fprop in ("shape", "origin", "coldspot", "gunspot", "_rle_encoded_pixmap", "tagged"):
-                    assert(getattr(frame1, fprop) == getattr(frame2, fprop))
+                    assert getattr(frame1, fprop) == getattr(frame2, fprop)
                 if frame1.mask != frame2.mask:
                     for mask in (frame1.mask, frame2.mask):
-                        assert(mask is None or not any(mask))
-        for samp1, samp2 in zip(set1._samples, set2._samples):
+                        assert mask is None or not any(mask)
+        for samp1, samp2 in zip(set1.samples, set2.samples):
             for sprop in ("_data", "_rate", "volume", "_bits", "_channels", "loop"):
-                assert(getattr(samp1, sprop) == getattr(samp2, sprop))
-#                         assert(pixmap is None or not any(any(row) for row in pixmap))
+                assert getattr(samp1, sprop) == getattr(samp2, sprop)
+#                         assert pixmap is None or not any(any(row) for row in pixmap)
 
 #############################################################################################################
 
@@ -113,7 +110,6 @@ def show_anim(set_num, anim_num):
     images = [anims.render_pixelmap(frame) for frame in anim.frames]
     fps = anim.fps
 
-#     borders = np.array([[finfo["hotspotx"], finfo["width"], finfo["hotspoty"], finfo["height"]] for finfo in frameinfo_l])
     borders = np.array([[frame.origin[0], frame.shape[0], frame.origin[1], frame.shape[1]] for frame in anim.frames])
     borders[:,1] += borders[:,0]
     borders[:,3] += borders[:,2]
@@ -237,7 +233,7 @@ def _random_pixmap(seed=None, width=260, height=80):
                 yield val - csum + limit
                 break
     a0 = b''.join(b * times for times, b in zip(gen(lambda : random.randrange(255), width * height), itertools.cycle([b'\x00', b'\xff'])))
-    assert(len(a0) == width * height)
+    assert len(a0) == width * height
     return np.frombuffer(a0, dtype=np.uint8).reshape((height, width))
 
 def frame_encoding_test(seed=None):
@@ -261,8 +257,8 @@ def mask_autogen_test(times = 1):
             frame.autogenerate_mask()
             mask = bytearray(frame.mask)
             for bit, pix in zip(bit_iter(mask), itertools.chain(*pixmap)):
-                assert(bit == bool(pix))
-            assert(mask[-1] >> (1 + ((width*height - 1) & 7)) == 0)
+                assert bit == bool(pix)
+            assert mask[-1] >> (1 + ((width*height - 1) & 7)) == 0
     except AssertionError as e:
         print(width, height)
         print(pixmap)
@@ -274,16 +270,15 @@ def sample_serializing_test():
     for set_num, s in enumerate(anims.sets):
         samplesdata = bytearray(zlib.decompress(s._chunks[3][0], zlib.MAX_WBITS, s._chunks[3][1]))
         hdr_size = J2A.Sample._Header.size
-        s.unpack()
-        for sample_num, sample in enumerate(s._samples):
+        for sample_num, sample in enumerate(s.samples):
             newsampledata = sample.serialize()
             re_sample, _ = J2A.Sample.read(newsampledata, 0)
             for sprop in J2A.Sample.__slots__:
-                assert(getattr(re_sample, sprop) == getattr(sample, sprop)), "Matching failed on set %d, frame %d" % (set_num, sample_num)
+                assert getattr(re_sample, sprop) == getattr(sample, sprop), "Matching failed on set %d, frame %d" % (set_num, sample_num)
             # The "reserved2" field is dropped, even though it is not always zero in retail Anims.j2a:
             samplesdata[hdr_size-4:hdr_size] = b'\x00\x00\x00\x00'
             try:
-                assert(samplesdata.startswith(newsampledata)), "Matching failed on set %d, frame %d" % (set_num, sample_num)
+                assert samplesdata.startswith(newsampledata), "Matching failed on set %d, frame %d" % (set_num, sample_num)
             except:
                 for offset in range(0, len(newsampledata), 0x40):
                     print(  samplesdata[offset:offset+0x40].hex())
@@ -333,7 +328,7 @@ def profile_func(funcname, mode, *pargs):
 if __name__ == "__main__":
     fmap = dict((k, v) for k,v in globals().items() if isinstance(v, FunctionType) and not k.startswith('_'))
 
-    assert(int(True) is 1)
+    assert int(True) is 1
     isint = lambda x : x[int(x[:1] in '+-'):].isdigit()
 
     anims_path = None
