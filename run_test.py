@@ -302,14 +302,8 @@ def _encoding_strip(frame):
     return enc[:get_real_length(enc, frame.shape[1])]
 
 def gen_bigimage(filename):
-    import operator
-    import itertools
     import more_itertools
     from PIL import Image
-
-    def accumulate(it):  # This is nonstandard
-        yield 0
-        yield from itertools.accumulate(it)
 
     anims = _read_hdr()
     global_width = 0
