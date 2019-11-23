@@ -110,9 +110,7 @@ def show_anim(set_num, anim_num):
     images = [anims.render_pixelmap(frame) for frame in anim.frames]
     fps = anim.fps
 
-    borders = np.array([[frame.origin[0], frame.shape[0], frame.origin[1], frame.shape[1]] for frame in anim.frames])
-    borders[:,1] += borders[:,0]
-    borders[:,3] += borders[:,2]
+    borders = np.array([[x, x + w, -y - h, -y] for frame in anim.frames for x, y, w, h in [frame.origin + frame.shape]])
     extremes = ((borders[:,0].min(), borders[:,1].max()), (borders[:,2].min(), borders[:,3].max()))
 
     fig, ax = plt.subplots()
@@ -286,6 +284,65 @@ def sample_serializing_test():
                 raise
             samplesdata = samplesdata[len(newsampledata):]
     print("Test SUCCESSFUL")
+
+def _encoding_strip(frame):
+    def get_real_length(enc, height):
+        assert isinstance(enc, bytearray)
+        i = count = 0
+        while i < len(enc):
+            byte = enc[i]
+            i += 1
+            if byte > 0x80:
+                i += byte - 0x80
+            elif byte == 0x80:
+                count += 1
+                if count >= height:
+                    return i
+    enc = frame._rle_encoded_pixmap
+    return enc[:get_real_length(enc, frame.shape[1])]
+
+def gen_bigimage(filename):
+    import operator
+    import itertools
+    import more_itertools
+    from PIL import Image
+
+    def accumulate(it):  # This is nonstandard
+        yield 0
+        yield from itertools.accumulate(it)
+
+    anims = _read_hdr()
+    global_width = 0
+    main_map = []
+    for set_num, s in enumerate(anims.sets):
+        set_width = set_height = 0
+        frames_l = []
+        for anim_num, anim in enumerate(s.animations):
+            frame = more_itertools.first_true(anim.frames, None, lambda frame : frame.shape > (1, 1))
+            set_width += frame.shape[0]
+            set_height = max(set_height, frame.shape[1])
+            frames_l.append(frame.decode_image())
+        main_map.append([frames_l, set_height])
+        global_width = max(global_width, set_width)
+    pixmap = []
+    for frames_l, set_height in main_map:
+        pixmap_add = [[] for _ in range(set_height)]
+        for frame in frames_l:
+            width, height = frame.shape
+            for pix_row, frame_row in zip(pixmap_add, frame._pixmap):
+                pix_row += frame_row
+            for pix_row in pixmap_add[height:]:
+                pix_row += [0] * width
+        width = global_width - sum(frame.shape[0] for frame in frames_l)
+        for pix_row in pixmap_add:
+            pix_row += [0] * width
+        pixmap += pixmap_add
+    global_height = sum(set_height for _, set_height in main_map)
+    assert all(len(row) == global_width for row in pixmap)
+    assert len(pixmap) == global_height
+    big_frame = J2A.Frame(shape = (global_width, global_height), pixmap = pixmap)
+    image = anims.render_pixelmap(big_frame)
+    image.save(filename)
 
 def profile_func(funcname, mode, *pargs):
     '''
