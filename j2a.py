@@ -45,20 +45,20 @@ def raising_function(string, exception):
 
 
 class J2A:
-    __slots__ = ["sets", "filename", "config", "palette", "palettesequence"]
+    __slots__ = ["sets", "filename", "config"]
     _Header = misc.NamedStruct("4s|signature/L|magic/L|headersize/h|version/h|unknown/L|filesize/L|crc32/L|setcount")
-    _defaultconfig = {"palette": "Diamondus_2.pal", "compress_method": 9, "null_image": "error", "null_mask": "ignore",
-        "fake_size_and_crc": None, "empty_set": None}
+    _defaultconfig = {"compress_method": 9, "null_image": "error", "null_mask": "ignore", "fake_size_and_crc": None,
+        "empty_set": None}
     _error_action = {
         "ignore":  (lambda s, c: None),
         "warning": (lambda s, c: print("Warning:", s, file=sys.stderr)),
         "error":   raising_function
     }
 
-    class J2AParsingError(Exception):
+    class ParsingError(Exception):
         pass
 
-    class J2APackingError(Exception):
+    class PackingError(Exception):
         pass
 
     class Set(object):
@@ -162,7 +162,7 @@ class J2A:
                 if self._samplecount == 0:
                     samplesbaseindex = 0
                 else:
-                    raise J2APackingError("'samplesbaseindex' member must be set when packing a set with samples")
+                    raise J2A.PackingError("'samplesbaseindex' member must be set when packing a set with samples")
 
             setheader = {
                 "signature": b'ANIM',
@@ -215,9 +215,9 @@ class J2A:
                             mask_data += f.mask + b'\x00' * (-len(f.mask) & 3)
 
                 if null_pixmaps > 0:
-                    J2A._error_action[config["null_image"]]("found %d frames with null images" % null_pixmaps, J2A.J2APackingError)
+                    J2A._error_action[config["null_image"]]("found %d frames with null images" % null_pixmaps, J2A.J2A.PackingError)
                 if null_masks > 0:
-                    J2A._error_action[config["null_mask" ]]("found %d frames with null masks"  % null_masks  , J2A.J2APackingError)
+                    J2A._error_action[config["null_mask" ]]("found %d frames with null masks"  % null_masks  , J2A.J2A.PackingError)
 
                 img_length = len(img_data)
                 for frame_info in l_frameinfo:
@@ -379,6 +379,7 @@ class J2A:
             self.mask = mask
             return self
 
+
     class Sample(object):
         __slots__ = ["_data", "_rate", "volume", "_bits", "_channels", "loop"]
         _Header = misc.NamedStruct("L|total_size/4s|riff_id/L|riff_size/4s|format/4s|sc_id/L|sc_size/L|reserved1_size/32s|reserved1/H|unknown1/h|volume/H|flags/H|unknown2/L|nsamples/L|loop_start/L|loop_end/L|sample_rate/L|has_appendix/L|reserved2")
@@ -442,7 +443,6 @@ class J2A:
 
     def __init__(self, filename=None, **kwargs):
         ''' initializes class, sets file name '''
-        self.palette = None
         self.sets = []
         self.set_filename(filename)
         self.config = J2A._defaultconfig.copy()
@@ -460,7 +460,7 @@ class J2A:
             b = f.read(delta)
             assert len(b) == delta
         elif delta < 0:
-            raise J2AParsingError("File is not a valid J2A file (overlapping sets)")
+            raise J2A.ParsingError("File is not a valid J2A file (overlapping sets)")
 
     def read(self):
         ''' reads whole J2A file, parses ALIB and ANIM headers and collects all sets '''
@@ -494,7 +494,7 @@ class J2A:
                 if crc & 0xffffffff != alibheader["crc32"]:
                     print("Warning: CRC32 mismatch in J2A file %s. Ignoring..." % self.filename, file=sys.stderr)
             except (AssertionError, struct.error):
-                raise J2A.J2AParsingError("File %s is not a valid J2A file" % self.filename)
+                raise J2A.ParsingError("File %s is not a valid J2A file" % self.filename)
 
         return self
 
@@ -507,7 +507,7 @@ class J2A:
         if filename is None:
             filename = self.filename
             if filename is None:
-                raise J2APackingError("no filename specified")
+                raise J2A.PackingError("no filename specified")
         self.pack()
         setcount = len(self.sets)
         set_data = [s.serialize(self.config) for s in self.sets]
@@ -529,7 +529,7 @@ class J2A:
             target_crc &= 0xffffffff
             if (cur_offset, crc) != (target_filesize, target_crc):
                 if target_filesize - cur_offset < 4:
-                    raise J2APackingError("Can't fake filesize and CRC32, obtained size is too large")
+                    raise J2A.PackingError("Can't fake filesize and CRC32, obtained size is too large")
                 extra_data = b'\x00' * (target_filesize - cur_offset - 4)
                 crc = zlib.crc32(extra_data, crc)
                 salt = misc.fake_crc(target_crc)
@@ -562,59 +562,68 @@ class J2A:
             s.pack(self.config)
         return self
 
-    def get_palette(self, given = None):
-        if not self.palette:
-            palfile = open(self.config["palette"]).readlines() if not given else given
-            pal = list()
-            for i in range(3, 259):
-                color = palfile[i].rstrip("\n").split(' ')
-                pal.append((int(color[0]), int(color[1]), int(color[2])))
-            self.palette = pal
-            self.palettesequence = [band for color in pal for band in color]
 
-        return self.palette
+class FrameConverter(object):
+    __slots__ = ["palette"]
 
-    def render_pixelmap(self, frame):
-        img = Image.new("RGBA", frame.shape)
-        im = img.load()
-        pal = self.get_palette()
+    class ParsingError(Exception):
+        pass
 
-        for x, row in enumerate(frame.decode_image()._pixmap):
-            for y, index in enumerate(row):
-                if index > 1:
-                    im[y, x] = pal[index]
+    def __init__(self, palette=None, palette_data=None, palette_file=None):
+        if palette is None and palette_data is None and palette_file is None:
+            raise ValueError("argument required")
 
+        if palette is None and palette_data is None:
+            with open(palette_file, "rb") as f:
+                palette_data = bytearray(f.read())
+
+        if palette is None:
+            try:
+                if palette_data.startswith(b'JASC-PAL\r\n0100\r\n256\r\n'):
+                    palette_data = palette_data.splitlines()[3:]
+                    assert len(palette_data) == 256
+                    palette = [(int(r), int(g), int(b)) for r, g, b in map(bytearray.split, palette_data)]
+                elif len(palette_data) == 256 * 4 and not any(palette_data[3::4]):
+                    palette = [(r, g, b) for r, g, b, _ in grouper(palette_data, 4)]
+                else:
+                    assert False
+            except None:
+                raise FrameConverter.ParsingError("unrecognized palette format")
+
+        if not isinstance(palette, (list, tuple)):
+            raise ValueError("palette must be a list or tuple of integer triplets (R, G, B)")
+
+        self.palette = palette
+
+    def to_image(self, frame, mode="P"):
+        img = Image.new(mode, frame.shape)
+        if mode == "RGBA":
+            img_data = img.load()
+            pal = self.palette
+            for x, row in enumerate(frame.decode_image()._pixmap):
+                for y, index in enumerate(row):
+                    if index > 1:
+                        img_data[y, x] = pal[index]
+        elif mode == "P":
+            img.putdata(list(itertools.chain(*frame.decode_image()._pixmap)))
+            img.putpalette(list(itertools.chain(*self.palette)))
+            img.info["transparency"] = 0
+        else:
+            raise ValueError("unsupported mode")
         return img
-
-    def render_paletted_pixelmap(self, frame):
-        pixelmap = frame.decode_image()._pixmap
-        img = Image.new("P", frame.shape)
-        img.putdata([pixel for col in pixelmap for pixel in col])
-        self.get_palette()
-        img.putpalette(self.palettesequence)
-        return img
-
-    def get_frame(self, set_num, anim_num, frame_num):
-        ''' gets image info and image corresponding to a specific set, animation and frame number '''
-        s = self.sets[set_num]
-        anim = s.animations[anim_num]
-        frame = anim.frames[frame_num]
-
-        return [frame, self.render_pixelmap(frame)]
-
-    def render_frame(self, *coordinates):
-        self.get_frame(*coordinates)[1].save("preview.png", "PNG")
 
 def main():
     from sys import argv
     filename = argv[1] if (len(argv) >= 2) else "C:\Games\Jazz2\Anims.j2a"
     try:
-        j2a = J2A(filename)
+        anims = J2A(filename).read()
     except IOError:
         print("File %s could not be read!" % filename, file=sys.stderr)
         return 1
 
-    j2a.render_frame(9, 0, 6)
+    set_num, anim_num, frame_num = (9, 0, 6)
+    frame = anims.sets[set_num].animations[anim_num].frames[frame_num]
+    FrameConverter(palette_file = "Diamondus_2.pal").to_image(frame).save("preview.png", "PNG")
 
 if __name__ == "__main__":
     sys.exit(main())

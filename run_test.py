@@ -5,9 +5,10 @@ import sys
 import struct
 import itertools
 import zlib
-from types import FunctionType
+import types
+from PIL import Image
 
-from j2a import J2A
+from j2a import J2A, FrameConverter
 
 if sys.version_info[0] <= 2:
     input = raw_input
@@ -78,16 +79,6 @@ def _assert_equal_anims(anims1, anims2):
 #############################################################################################################
 
 def show_frame(set_num, anim_num, frame_num):
-    try:
-        import matplotlib.pyplot as plt
-        def show_img(img):
-            plt.imshow(img)
-            plt.axis('off')
-            plt.show()
-    except ImportError:
-        def show_img(img):
-            img.show()
-
     anims = _read_hdr()
     try:
         frame = anims.sets[set_num].animations[anim_num].frames[frame_num]
@@ -95,8 +86,15 @@ def show_frame(set_num, anim_num, frame_num):
         print("Error: some index was out of bounds")
         return 1
 
-    rendered = anims.render_pixelmap(frame)
-    show_img(rendered)
+    renderer = FrameConverter(palette_file = "Diamondus_2.pal")
+
+    try:
+        import matplotlib.pyplot as plt
+        plt.imshow(renderer.to_image(frame, "RGBA"))
+        plt.axis('off')
+        plt.show()
+    except ImportError:
+        renderer.to_image(frame, "P").show()
 
 def show_anim(set_num, anim_num):
     import numpy as np
@@ -107,7 +105,8 @@ def show_anim(set_num, anim_num):
     s = anims.sets[set_num]
     anim = s.animations[anim_num]
 
-    images = [anims.render_pixelmap(frame) for frame in anim.frames]
+    renderer = FrameConverter(palette_file = "Diamondus_2.pal")
+    images = [renderer.to_image(frame, "RGBA") for frame in anim.frames]
     fps = anim.fps
 
     borders = np.array([[x, x + w, -y - h, -y] for frame in anim.frames for x, y, w, h in [frame.origin + frame.shape]])
@@ -165,10 +164,11 @@ generate_compmethod_stats.struct = struct.Struct("<BBBBBBBL")
 
 def stress_test():
     anims = _read_hdr()
+    renderer = FrameConverter(palette_file = "Diamondus_2.pal")
     for s in anims.sets:
         for anim in s.animations:
             for frame in anim.frames:
-                anims.render_pixelmap(frame)
+                renderer.to_image(frame, "RGBA")
 
 def writing_test():
     anims = _read_hdr()
@@ -303,7 +303,6 @@ def _encoding_strip(frame):
 
 def gen_bigimage(filename):
     import more_itertools
-    from PIL import Image
 
     anims = _read_hdr()
     global_width = 0
@@ -318,25 +317,24 @@ def gen_bigimage(filename):
             frames_l.append(frame.decode_image())
         main_map.append([frames_l, set_height])
         global_width = max(global_width, set_width)
-    pixmap = []
+    big_pixmap = []
     for frames_l, set_height in main_map:
-        pixmap_add = [[] for _ in range(set_height)]
+        pixmap = [[] for _ in range(set_height)]
         for frame in frames_l:
             width, height = frame.shape
-            for pix_row, frame_row in zip(pixmap_add, frame._pixmap):
+            for pix_row, frame_row in zip(pixmap, frame._pixmap):
                 pix_row += frame_row
-            for pix_row in pixmap_add[height:]:
+            for pix_row in pixmap[height:]:
                 pix_row += [0] * width
         width = global_width - sum(frame.shape[0] for frame in frames_l)
-        for pix_row in pixmap_add:
+        for pix_row in pixmap:
             pix_row += [0] * width
-        pixmap += pixmap_add
+        big_pixmap += pixmap
     global_height = sum(set_height for _, set_height in main_map)
-    assert all(len(row) == global_width for row in pixmap)
-    assert len(pixmap) == global_height
-    big_frame = J2A.Frame(shape = (global_width, global_height), pixmap = pixmap)
-    image = anims.render_pixelmap(big_frame)
-    image.save(filename)
+    assert all(len(row) == global_width for row in big_pixmap)
+    assert len(big_pixmap) == global_height
+    big_frame = J2A.Frame(shape = (global_width, global_height), pixmap = big_pixmap)
+    FrameConverter(palette_file = "Diamondus_2.pal").to_image(big_frame).save(filename)
 
 def profile_func(funcname, mode, *pargs):
     '''
@@ -377,7 +375,7 @@ def profile_func(funcname, mode, *pargs):
 #############################################################################################################
 
 if __name__ == "__main__":
-    fmap = dict((k, v) for k,v in globals().items() if isinstance(v, FunctionType) and not k.startswith('_'))
+    fmap = dict((k, v) for k,v in globals().items() if isinstance(v, types.FunctionType) and not k.startswith('_'))
 
     assert int(True) is 1
     isint = lambda x : x[int(x[:1] in '+-'):].isdigit()

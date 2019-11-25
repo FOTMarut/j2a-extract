@@ -2,7 +2,7 @@ from __future__ import print_function
 import os
 import sys
 import struct
-from j2a import J2A
+from j2a import J2A, FrameConverter
 
 if sys.version_info[0] <= 2:
     input = raw_input
@@ -13,6 +13,7 @@ def main():
     outputdir = sys.argv[2] if (len(sys.argv) >= 3) else \
         os.path.join(os.path.dirname(animsfilename), os.path.basename(animsfilename).replace('.', '-'))
     j2a = J2A(animsfilename).read()
+    renderer = FrameConverter(palette_file = "Diamondus_2.pal")
     for setnum, s in enumerate(j2a.sets):
         s = j2a.sets[setnum]
         setdir = os.path.join(outputdir, str(setnum))
@@ -34,7 +35,7 @@ def main():
                      frame.coldspot +
                      frame.gunspot
                 ))
-                j2a.render_paletted_pixelmap(frame).save(imgfilename)
+                renderer.to_image(frame).save(imgfilename)
         print("Finished extracting set %d (%d animations)" % (setnum, animnum + 1))
 
 if __name__ == "__main__":
