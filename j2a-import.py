@@ -6,7 +6,7 @@ import struct
 import re
 import zlib
 from PIL import Image
-from j2a import J2A
+from j2a import J2A, FrameConverter
 import misc
 
 if sys.version_info[0] <= 2:
@@ -29,6 +29,8 @@ def main():
         print("Folder name is improperly formatted (must be named ***-j2a)!", file=sys.stderr)
         return 1
     outfilename = sys.argv[2] if (len(sys.argv) >= 3) else dirname.replace("-j2a", ".j2a")
+    outfilename = os.path.abspath(outfilename)
+    fconv = FrameConverter(palette_file = "Diamondus_2.pal")
     os.chdir(dirname)
     setdirlist = get_numeric_subdirs()
     if not setdirlist:
@@ -58,23 +60,27 @@ def main():
             elif len(fpsfile) > 1:
                 print("Warning: found multiple fps files in folder %s/%s, ignoring" % (set_dir, anim_dir))
 
-            for frame_num, frameinfo in enumerate(frameinfo_list):
-                frame_filename = frameinfo.group()
-                groups = list(frameinfo.groups())
-                groups[2:] = list(map(int, groups[2:]))
-                assert int(groups[0]) == frame_num, \
-                    "unexected frame %s/%s/%s, might be a duplicate or a frame is missing" % (set_dir, anim_dir, frame_filename)
-                image = Image.open(frame_filename)
-                assert image.mode == "P", "image file %s is not paletted" % os.path.abspath(frame_filename)
-                frame = J2A.Frame(
-                    pixmap = image,
-                    origin = tuple(groups[2:4]),
-                    coldspot = tuple(groups[4:6]),
-                    gunspot = tuple(groups[6:8]),
-                    tagged = bool(groups[1])
-                )
-                frame.autogenerate_mask()
-                cur_anim.frames.append(frame)
+            try:
+                for frame_num, frameinfo in enumerate(frameinfo_list):
+                    frame_filename = frameinfo.group()
+                    groups = list(frameinfo.groups())
+                    groups[2:] = list(map(int, groups[2:]))
+                    assert int(groups[0]) == frame_num, \
+                        "unexpected frame %s/%s/%s, might be a duplicate or a frame is missing" % (set_dir, anim_dir, frame_filename)
+                    image = Image.open(frame_filename)
+                    frame = fconv.from_image(
+                        image,
+                        origin = tuple(groups[2:4]),
+                        coldspot = tuple(groups[4:6]),
+                        gunspot = tuple(groups[6:8]),
+                        tagged = bool(groups[1])
+                    )
+                    frame.autogenerate_mask()
+                    cur_anim.frames.append(frame)
+            except ValueError as e:
+                e.args = ("%s: %s/%s/%s/%s" % (e.args[0], dirname, set_dir, anim_dir, frame_filename), ) + e.args[1:]
+                raise
+
             os.chdir("..")
         cur_set.samplesbaseindex = 0
         cur_set.pack(anims.config)

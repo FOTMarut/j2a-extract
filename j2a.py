@@ -279,12 +279,6 @@ class J2A:
             if not rle_encoded_pixmap is None:
                 assert not shape is None
                 self._rle_encoded_pixmap = bytearray(rle_encoded_pixmap)
-            elif isinstance(pixmap, Image.Image):
-                assert shape is None or shape == pixmap.size
-                self.shape = pixmap.size
-                width, height = pixmap.size
-                self._pixmap = [bytearray(row) for row in grouper(pixmap.tobytes(), width)]
-                assert len(self._pixmap) == height
             else:
                 self._pixmap = pixmap
 
@@ -441,6 +435,7 @@ class J2A:
             assert len(retval) == total_size
             return retval
 
+
     def __init__(self, filename=None, **kwargs):
         ''' initializes class, sets file name '''
         self.sets = []
@@ -564,7 +559,7 @@ class J2A:
 
 
 class FrameConverter(object):
-    __slots__ = ["palette"]
+    __slots__ = ["_palette", "_palette_flat", "_img"]
 
     class ParsingError(Exception):
         pass
@@ -595,22 +590,46 @@ class FrameConverter(object):
 
         self.palette = palette
 
+    @property
+    def palette(self):
+        return self._palette.copy()
+    @palette.setter
+    def palette(self, value):
+        "Expects 'value' to be a list of 3-tuples"
+        self._palette = value
+        self._palette_flat = bytes(bytearray(itertools.chain(*value)))
+        self._img = Image.new("P", (0, 0), None)
+        self._img.im.putpalette("RGB", self._palette_flat)
+
     def to_image(self, frame, mode="P"):
         img = Image.new(mode, frame.shape)
         if mode == "RGBA":
             img_data = img.load()
-            pal = self.palette
+            pal = self._palette
             for x, row in enumerate(frame.decode_image()._pixmap):
                 for y, index in enumerate(row):
                     if index > 1:
                         img_data[y, x] = pal[index]
         elif mode == "P":
             img.putdata(list(itertools.chain(*frame.decode_image()._pixmap)))
-            img.putpalette(list(itertools.chain(*self.palette)))
+            img.putpalette(self._palette_flat)
             img.info["transparency"] = 0
         else:
             raise ValueError("unsupported mode")
         return img
+
+    def from_image(self, image, perform_conversion = False, **kwargs):
+        if not (image.mode == "P" and image.palette.getdata()[1] == self._palette_flat):
+            if perform_conversion:
+                image = image.quantize(palette = self._img)
+            elif image.mode != "P":
+                raise ValueError("image is not paletted")
+            else:
+                raise ValueError("image has wrong palette")
+        width, height = image.size
+        pixmap = [bytearray(row) for row in grouper(image.tobytes(), width)]
+        return J2A.Frame(shape = (width, height), pixmap = pixmap, **kwargs)
+
 
 def main():
     from sys import argv

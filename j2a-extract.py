@@ -18,7 +18,7 @@ def main():
         s = j2a.sets[setnum]
         setdir = os.path.join(outputdir, str(setnum))
         if not os.path.exists(setdir):
-             os.makedirs(setdir)
+            os.makedirs(setdir)
         for animnum, anim in enumerate(s.animations):
             dirname = os.path.join(setdir, str(animnum))
             if not os.path.exists(dirname):
