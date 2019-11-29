@@ -6,7 +6,6 @@ import struct
 import itertools
 import zlib
 import types
-from PIL import Image
 
 from j2a import J2A, FrameConverter
 
@@ -195,6 +194,49 @@ def repacking_test():
                 failed = True
     print("Packing test", "FAILED" if failed else "PASSED")
 
+def palette_read_test(times = 1):
+    from j2a import FrameConverter
+    import random
+    palette_flat = bytearray(os.urandom(768))
+    palette = [(palette_flat[i], palette_flat[i+1], palette_flat[i+2]) for i in range(0, 768, 3)]
+    def test():
+        fconv = FrameConverter(palette_data = data)
+        assert fconv._palette      == palette
+        assert fconv._palette_flat == palette_flat
+
+    for _ in range(times):
+        data = b'JASC-PAL\r\n0100\r\n256\r\n' + \
+            b''.join(b'  %d %d\t%d \r\n' % (r, g, b) for r, g, b in palette)
+        test() # JASC test
+
+        data = b'GIMP Palette\n' + \
+            (b'Name: name\n'    if random.randrange(2) else b'') + \
+            (b'Columns: 1337\n' if random.randrange(2) else b'') + \
+            b''.join(b' %d %d\t%d garbage\n#garbage\n' % (r, g, b) for r, g, b in palette)
+        test() # GIMP test
+
+        data = b''.join(bytes(palette_flat[i:i+3]) + b'\x00' for i in range(0, 768, 3))
+        test() # J2A format test
+
+        data = palette_flat
+        test() # ACT test
+        data = data + struct.pack(">HH", 256, 0)
+        test() # ACT test
+
+        data = bytearray(b'\x00\x01\x01\x00' + b'\x00' * (256 * 10))
+        for i, color in enumerate(palette):
+            data[4 + 10*i + 2 : 4 + 10*i + 8 : 2] = color
+        test() # ACO test
+        from string import printable as charset
+        data += b'\x00\x02\x01\x00'
+        for i in range(256):
+            name_len = random.randrange(32)
+            name = ''.join(random.choice(charset) for _ in range(name_len))
+            data += data[4+10*i:4+10*i+10] + struct.pack(">L", name_len + 1) + name.encode("utf_16_be") + b'\x00\x00'
+        test() # ACO test
+
+    print("Test PASSED")
+
 def full_cycle():
     anims = _read_hdr()
     for s in anims.sets:
@@ -377,7 +419,7 @@ def profile_func(funcname, mode, *pargs):
 if __name__ == "__main__":
     fmap = dict((k, v) for k,v in globals().items() if isinstance(v, types.FunctionType) and not k.startswith('_'))
 
-    assert int(True) is 1
+    assert int(True) == 1
     isint = lambda x : x[int(x[:1] in '+-'):].isdigit()
 
     anims_path = None

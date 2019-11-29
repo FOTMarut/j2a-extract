@@ -585,31 +585,8 @@ class FrameConverter(object):
                 palette_data = bytearray(f.read())
 
         if palette is None:
-            try:
-                if palette_data.startswith(b'JASC-PAL\r\n0100\r\n256\r\n'):  # JASC .pal file (PaintShop Pro)
-                    palette_data = palette_data.splitlines()[3:]
-                    assert len(palette_data) == 256
-                    palette = [(int(r), int(g), int(b)) for r, g, b in map(bytearray.split, palette_data)]
-                elif palette_data.startswith(b'GIMP Palette'):  # GIMP palette
-                    palette_data = palette_data.splitlines()[1:]
-                    if palette_data[0].startswith(b'Name: '):
-                        palette_data.pop(0)
-                    if palette_data[0].startswith(b'Columns: '):
-                        palette_data.pop(0)
-                    filtered_split = (row.split()[:3] for row in filter(lambda row : not row.startswith(b'#'), palette_data))
-                    palette = [(int(r), int(g), int(b)) for r, g, b in filtered_split]
-                    assert len(palette) == 256
-                elif len(palette_data) == 256 * 4 and not any(palette_data[3::4]):  # format used by JJ2 in Data.j2d
-                    palette = [(r, g, b) for r, g, b, _ in grouper(palette_data, 4)]
-                elif len(palette_data) == 256 * 3:  # .ACT file (Adobe Photoshop color table)
-                    palette = [(r, g, b) for r, g, b in grouper(palette_data, 3)]
-                elif len(palette_data) == 256 * 3 + 4:  # .ACT file (Adobe Photoshop color table)
-                    assert palette_data[258:260] == b'\x00\x00', "transparency color index must be 0"
-                    palette = [(r, g, b) for r, g, b in grouper(palette_data[:256], 3)]
-                else:
-                    assert False
-            except AssertionError:
-                raise FrameConverter.ParsingError("unrecognized palette format")
+            palette_data = palette_data if isinstance(palette_data, bytearray) else bytearray(palette_data)
+            palette = FrameConverter._read_palette(palette_data)
 
         if not isinstance(palette, (list, tuple)):
             raise ValueError("palette must be a list or tuple of integer triplets (R, G, B)")
@@ -656,10 +633,76 @@ class FrameConverter(object):
         pixmap = [bytearray(row) for row in grouper(image.tobytes(), width)]
         return J2A.Frame(shape = (width, height), pixmap = pixmap, **kwargs)
 
+    #########################################################################################################
+
+    @staticmethod
+    def _read_palette(palette_data):  # Must be a bytearray
+        for parser in FrameConverter._pal_parsers:
+            try:
+                result = parser(palette_data)
+                if result:
+                    assert len(result) == 256
+                    return result
+            except:
+#                 from traceback import print_exc; print_exc()
+                pass
+        raise FrameConverter.ParsingError("unrecognized palette format")
+
+    @staticmethod
+    def _parse_JASC_PAL(palette_data):  # JASC .pal file (PaintShop Pro)
+        if palette_data.startswith(b'JASC-PAL\r\n0100\r\n256\r\n'):
+            palette_data = palette_data.splitlines()[3:]
+            return [(int(r), int(g), int(b)) for r, g, b in map(bytearray.split, palette_data)]
+
+    @staticmethod
+    def _parse_GIMP_PAL(palette_data):  # GIMP palette
+        if palette_data.startswith(b'GIMP Palette'):
+            palette_data = palette_data.splitlines()[1:]
+            if palette_data[0].startswith(b'Name: '):
+                palette_data.pop(0)
+            if palette_data[0].startswith(b'Columns: '):
+                palette_data.pop(0)
+            filtered_split = (row.split()[:3] for row in filter(lambda row : not row.startswith(b'#'), palette_data))
+            return [(int(r), int(g), int(b)) for r, g, b in filtered_split]
+
+    @staticmethod
+    def _parse_JJ2_PAL(palette_data):  # format used by JJ2 in Data.j2d
+        if len(palette_data) == 256 * 4 and not any(palette_data[3::4]):
+            return [(r, g, b) for r, g, b, _ in grouper(palette_data, 4)]
+
+    @staticmethod
+    def _parse_ACT(palette_data):  # .ACT file (Adobe Photoshop color table)
+        if len(palette_data) == 256 * 3 + 4:
+            assert palette_data[-4:] == b'\x01\x00\x00\x00'
+            palette_data = palette_data[:-4]
+        if len(palette_data) == 256 * 3:
+            return [(r, g, b) for r, g, b in grouper(palette_data, 3)]
+
+    @staticmethod
+    def _parse_ACO(palette_data):  # .ACO file (Adobe Photoshop color swatch)
+        if len(palette_data) >= 2564 and palette_data.startswith(b'\x00\x01\x01\x00'):
+            color_data = struct.unpack_from(">1280H", palette_data, 4)
+            if ( any(color_data[0::5])  # only RGB supported...
+                    or any(color_data[4::5]) ):  # .. which means these should be 0 as well
+                return
+            if len(palette_data) > 2564:  # Validate version 2 data
+                assert palette_data[2564:2568] == b'\x00\x02\x01\x00'
+                extra_data = struct.unpack_from(">%dH" % ((len(palette_data) - 2568) // 2), palette_data, 2568)
+                offset = 0
+                for color in grouper(color_data, 5):
+                    assert color == extra_data[offset:offset+5]
+                    name_len = (extra_data[offset + 5] << 16) + extra_data[offset + 6]
+                    offset += 5 + 2 + name_len  # Skipping over name as well (no Unicode validation done)
+                assert offset == len(extra_data)
+            return list(grouper((color_data[5*i+j] >> 8 for i in range(256) for j in (1, 2, 3)), 3))
+
+FrameConverter._pal_parsers = [FrameConverter._parse_JASC_PAL, FrameConverter._parse_GIMP_PAL, FrameConverter._parse_JJ2_PAL,
+    FrameConverter._parse_ACT, FrameConverter._parse_ACO]
+
 
 def main():
     from sys import argv
-    filename = argv[1] if (len(argv) >= 2) else "C:\Games\Jazz2\Anims.j2a"
+    filename = argv[1] if (len(argv) >= 2) else r"C:\Games\Jazz2\Anims.j2a"
     try:
         anims = J2A(filename).read()
     except IOError:
