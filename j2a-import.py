@@ -1,6 +1,7 @@
 from __future__ import print_function
 import os
 import sys
+import logging
 import glob
 import struct
 import re
@@ -11,6 +12,9 @@ import misc
 
 if sys.version_info[0] <= 2:
     input = raw_input
+
+logging.basicConfig(format="%(levelname)s:j2a-import: %(message)s")
+error, warning = logging.error, logging.warning
 
 #leaf frame order:
 #0 1 2 1 0 3 4 5 6 7 8 9 3 4 5 6 7 8 9 0 1 2 1 0 10 11 12 13 14 15 16
@@ -26,7 +30,7 @@ def main():
         input("Please type the folder you wish to import:\n")
     dirname = os.path.abspath(dirname)
     if not os.path.basename(dirname).endswith("-j2a"):
-        print("Folder name is improperly formatted (must be named ***-j2a)!", file=sys.stderr)
+        error("Folder name is improperly formatted (must be named ***-j2a)!")
         return 1
     outfilename = sys.argv[2] if (len(sys.argv) >= 3) else dirname.replace("-j2a", ".j2a")
     outfilename = os.path.abspath(outfilename)
@@ -34,7 +38,7 @@ def main():
     os.chdir(dirname)
     setdirlist = get_numeric_subdirs()
     if not setdirlist:
-        print("No sets were found in that folder. No .j2a file will be compiled.", file=sys.stderr)
+        error("No sets were found in that folder. No .j2a file will be compiled.")
         return 1
     anims = J2A(outfilename, empty_set = "crop")
     anims.sets = [J2A.Set() for _ in range(int(setdirlist[-1]) + 1)]

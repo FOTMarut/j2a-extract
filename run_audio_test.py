@@ -7,76 +7,10 @@ from types import FunctionType
 
 from j2a import J2A
 import misc
+from run_test import _read_hdr
 
 if sys.version_info[0] <= 2:
     input = raw_input
-
-def _read_hdr():
-    global anims, anims_path
-    if "anims" in globals():
-        return anims
-    else:
-        print("Reading animations file", anims_path)
-        return J2A(anims_path).read()
-
-class RIFFChunk(object):
-    _Header = struct.Struct("<4sL")
-
-    def __init__(self, name, data, slack = None, staticdata=b''):
-        self.name = name
-        self.staticdata = staticdata
-        if slack is None:
-            self.subchunks, self.raw = RIFFChunk.collector(data)
-        else:
-            self.subchunks, self.raw = data, slack
-
-    @staticmethod
-    def collector(data, namesize=4, staticdatasize=0, inclusive_sizes=False):
-        debug_print = print if staticdatasize else lambda *pargs, **kwargs : None
-        assert isinstance(data, bytes)
-        chunks = []
-        Header = struct.Struct("<%dsL%ds" % (namesize, staticdatasize))
-        debug_print("# Launching collector with header of size", Header.size)
-        while len(data) >= Header.size:
-            debug_print("# Iteration on data", data[:16], "...")
-            name, size, staticdata = Header.unpack_from(data, 0)
-            debug_print("# 1)", name)
-            if not all(c in b' ABCDEFGHIJKLMNOPQRSTUVWXYZ' for c in name):
-                debug_print("# Bailing on step 1")
-                break
-            debug_print("# 2)", size, "+", Header.size, "<=", len(data))
-            cut_offset = size + (0 if inclusive_sizes else Header.size - staticdatasize)
-            if cut_offset > len(data):
-                debug_print("# Bailing on step 2")
-                break
-            chunks.append(RIFFChunk(name, [], data[Header.size:cut_offset], staticdata=staticdata))
-            data = data[cut_offset:]
-            debug_print("# 3)", len(data), ">=", Header.size)
-        return (chunks, data)
-
-    @staticmethod
-    def chunkify_buffer(data):
-        return RIFFChunk.collector(data, namesize=0, inclusive_sizes=True)
-
-def test_RIFF(filename):
-    with open("temp/set0sampledata.raw", "rb") as f:
-        samples_data = f.read()
-    mainchunk = RIFFChunk(b'MAIN', *RIFFChunk.chunkify_buffer(samples_data))
-    assert len(mainchunk.subchunks) > 0 and len(mainchunk.raw) == 0
-    for i,c in enumerate(mainchunk.subchunks):
-        c.subchunks, c.raw = RIFFChunk.collector(c.raw, 4, 4, False)
-        assert len(c.subchunks) == 1 and len(c.raw) == 0
-        riff_c = c.subchunks[0]
-        assert riff_c.name == b'RIFF'
-        riff_c.subchunks, riff_c.raw = RIFFChunk.collector(riff_c.raw)
-
-    def dump_chunks(chunk, indent=0):
-        print("{0}Chunk '{1}': {2} subchunks, sdata {3}, slack of length {4}; slack: {5}"
-            .format("\t" * indent, chunk.name.decode(), len(chunk.subchunks), chunk.staticdata, hex(len(chunk.raw)), chunk.raw))
-        for c in chunk.subchunks:
-            dump_chunks(c, indent + 1)
-
-    dump_chunks(mainchunk)
 
 S_Header = misc.NamedStruct(
     "L|total_size/"      # 0x0  - 0x4  (inclusive)

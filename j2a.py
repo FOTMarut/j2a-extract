@@ -8,6 +8,7 @@ import itertools
 import struct
 import os
 import sys
+import logging
 import zlib
 import array
 #needs python image library, http://www.pythonware.com/library/pil/
@@ -20,6 +21,17 @@ if sys.version_info[0] < 3:
     as_compressible = lambda x : bytes(x)
 else:
     as_compressible = lambda x : x
+
+_logger   = logging.getLogger(__name__)
+if not getattr(_logger, "handlers", False):
+    handler   = logging.StreamHandler()
+    formatter = logging.Formatter("%(levelname)s:%(name)s: %(message)s")
+    warning   = _logger.warning
+    _logger.setLevel(logging.DEBUG)
+    handler.setLevel(logging.DEBUG)
+    handler.setFormatter(formatter)
+    _logger.addHandler(handler)
+    del handler, formatter
 
 # From the official Python docs
 def pairwise(iterable):
@@ -51,7 +63,7 @@ class J2A:
         "empty_set": None}
     _error_action = {
         "ignore":  (lambda s, c: None),
-        "warning": (lambda s, c: print("Warning:", s, file=sys.stderr)),
+        "warning": warning,
         "error":   raising_function
     }
 
@@ -107,7 +119,7 @@ class J2A:
                 offsets = sorted((info[key], 2*i+j) for i, info in enumerate(frameinfo) for j, key in enumerate(("imageoffset", "maskoffset")))
                 offsets.append((len(imagedata), 2*len(frameinfo)))
                 if take(1, (o for o,i in offsets if o != -1 and o & 3)):
-                    print("Warning: unaligned offset found while unpacking", file=sys.stderr)
+                    warning("unaligned offset found while unpacking")
                 data = sorted((i1, None) if o1 == -1 else (i1, imagedata[o1:o2]) for (o1, i1), (o2, i2) in pairwise(offsets))
                 frames = (J2A.Frame.read(info, img, mask) for ((i1, img), (i2, mask)), info in zip(grouper(data, 2), frameinfo))
                 self._anims = [J2A.Animation(frames=take(info["framecount"], frames), fps=info["fps"]) for info in animinfo]
@@ -120,7 +132,7 @@ class J2A:
                         break
                     self._samples.append(sample)
                 if len(self._samples) != self._samplecount:
-                    print("Warning: internal sample miscount (expected: %d, got: %d)" % (self._samplecount, len(self._samples)), file=sys.stderr)
+                    warning("internal sample miscount (expected: %d, got: %d)", self._samplecount, len(self._samples))
 
                 self._chunks = None
                 del self._samplecount
@@ -408,7 +420,7 @@ class J2A:
             assert header["reserved1_size"] == 0x40,                        "sizes mismatch"
             assert header["sc_size"] == sample_data_size + 0x44,            "sizes mismatch"
             if header["reserved1"].lstrip(b'\x00'):
-                print("Warning: found nonzero sample reserved area")
+                warning("found nonzero sample reserved area")
 
             sample_data = raw[sample_data_offset:sample_data_offset + sample_data_size]
 
@@ -451,7 +463,7 @@ class J2A:
     def _seek(f, newpos):
         delta = newpos - f.tell()
         if delta > 0:
-            print("Warning: skipping over %d bytes" % delta, file=sys.stderr)
+            warning("skipping over %d bytes", delta)
             b = f.read(delta)
             assert len(b) == delta
         elif delta < 0:
@@ -467,7 +479,7 @@ class J2A:
                 assert (alibheader["signature"], alibheader["magic"], alibheader["headersize"], alibheader["version"]) == \
                        (b'ALIB', 0x00BEBA00, self._Header.size + 4*setcount, 0x0200)
                 if alibheader["unknown"] != 0x1808:
-                    print("Warning: minor difference found in ALIB header. Ignoring...", file=sys.stderr)
+                    warning("minor difference found in ALIB header. Ignoring...")
                 raw = j2afile.read(4*setcount)
                 setoffsets = struct.unpack('<%dL' % setcount, raw)
                 crc = zlib.crc32(raw)
@@ -484,10 +496,10 @@ class J2A:
                         self.sets.append(s)
                 raw = j2afile.read()
                 if raw:
-                    print("Warning: extra %d bytes found at the end of J2A file %s. Ignoring..." % (len(raw), self.filename), file=sys.stderr)
+                    warning("extra %d bytes found at the end of J2A file %s. Ignoring...", len(raw), self.filename)
                     crc = zlib.crc32(raw, crc)
                 if crc & 0xffffffff != alibheader["crc32"]:
-                    print("Warning: CRC32 mismatch in J2A file %s. Ignoring..." % self.filename, file=sys.stderr)
+                    warning("CRC32 mismatch in J2A file %s. Ignoring...", self.filename)
             except (AssertionError, struct.error):
                 raise J2A.ParsingError("File %s is not a valid J2A file" % self.filename)
 
@@ -574,15 +586,29 @@ class FrameConverter(object):
 
         if palette is None:
             try:
-                if palette_data.startswith(b'JASC-PAL\r\n0100\r\n256\r\n'):
+                if palette_data.startswith(b'JASC-PAL\r\n0100\r\n256\r\n'):  # JASC .pal file (PaintShop Pro)
                     palette_data = palette_data.splitlines()[3:]
                     assert len(palette_data) == 256
                     palette = [(int(r), int(g), int(b)) for r, g, b in map(bytearray.split, palette_data)]
-                elif len(palette_data) == 256 * 4 and not any(palette_data[3::4]):
+                elif palette_data.startswith(b'GIMP Palette'):  # GIMP palette
+                    palette_data = palette_data.splitlines()[1:]
+                    if palette_data[0].startswith(b'Name: '):
+                        palette_data.pop(0)
+                    if palette_data[0].startswith(b'Columns: '):
+                        palette_data.pop(0)
+                    filtered_split = (row.split()[:3] for row in filter(lambda row : not row.startswith(b'#'), palette_data))
+                    palette = [(int(r), int(g), int(b)) for r, g, b in filtered_split]
+                    assert len(palette) == 256
+                elif len(palette_data) == 256 * 4 and not any(palette_data[3::4]):  # format used by JJ2 in Data.j2d
                     palette = [(r, g, b) for r, g, b, _ in grouper(palette_data, 4)]
+                elif len(palette_data) == 256 * 3:  # .ACT file (Adobe Photoshop color table)
+                    palette = [(r, g, b) for r, g, b in grouper(palette_data, 3)]
+                elif len(palette_data) == 256 * 3 + 4:  # .ACT file (Adobe Photoshop color table)
+                    assert palette_data[258:260] == b'\x00\x00', "transparency color index must be 0"
+                    palette = [(r, g, b) for r, g, b in grouper(palette_data[:256], 3)]
                 else:
                     assert False
-            except None:
+            except AssertionError:
                 raise FrameConverter.ParsingError("unrecognized palette format")
 
         if not isinstance(palette, (list, tuple)):
@@ -592,7 +618,7 @@ class FrameConverter(object):
 
     @property
     def palette(self):
-        return self._palette.copy()
+        return self._palette[:]
     @palette.setter
     def palette(self, value):
         "Expects 'value' to be a list of 3-tuples"
@@ -603,7 +629,7 @@ class FrameConverter(object):
 
     def to_image(self, frame, mode="P"):
         img = Image.new(mode, frame.shape)
-        if mode == "RGBA":
+        if mode in ("RGB", "RGBA"):
             img_data = img.load()
             pal = self._palette
             for x, row in enumerate(frame.decode_image()._pixmap):
@@ -637,7 +663,7 @@ def main():
     try:
         anims = J2A(filename).read()
     except IOError:
-        print("File %s could not be read!" % filename, file=sys.stderr)
+        warning("File %s could not be read!", filename)
         return 1
 
     set_num, anim_num, frame_num = (9, 0, 6)

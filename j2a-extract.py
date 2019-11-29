@@ -20,16 +20,16 @@ def main():
         if not os.path.exists(setdir):
             os.makedirs(setdir)
         for animnum, anim in enumerate(s.animations):
-            dirname = os.path.join(setdir, str(animnum))
-            if not os.path.exists(dirname):
-                os.makedirs(dirname)
-            fps_filename = os.path.join(dirname, "fps.%d" % anim.fps)
+            animdir = os.path.join(setdir, str(animnum))
+            if not os.path.exists(animdir):
+                os.makedirs(animdir)
+            fps_filename = os.path.join(animdir, "fps.%d" % anim.fps)
             open(fps_filename, "a").close() # Touch fps file, leave it empty
             for framenum, frame in enumerate(anim.frames):
                 frameid = str(framenum)
                 if frame.tagged:
                     frameid += "t"
-                imgfilename = os.path.join(dirname, "{0:s},{1:d},{2:d},{3:d},{4:d},{5:d},{6:d}.png".format(
+                imgfilename = os.path.join(animdir, "{0:s},{1:d},{2:d},{3:d},{4:d},{5:d},{6:d}.png".format(
                     frameid,
                     *frame.origin +
                      frame.coldspot +
