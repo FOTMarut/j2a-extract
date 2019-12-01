@@ -1,19 +1,17 @@
 from __future__ import print_function
 import os
 import sys
-import struct
+import argparse
 from j2a import J2A, FrameConverter
 
 if sys.version_info[0] <= 2:
     input = raw_input
 
-def main():
-    animsfilename = sys.argv[1] if (len(sys.argv) >= 2) else \
-        input("Please type the animsfilename of the .j2a file you wish to extract:\n")
-    outputdir = sys.argv[2] if (len(sys.argv) >= 3) else \
-        os.path.join(os.path.dirname(animsfilename), os.path.basename(animsfilename).replace('.', '-'))
+def legacy_extractor(animsfilename, outputdir = None, palette_file = "Diamondus_2.pal"):
+    if outputdir is None:
+        outputdir = os.path.join(os.path.dirname(animsfilename), os.path.basename(animsfilename).replace('.', '-'))
     j2a = J2A(animsfilename).read()
-    renderer = FrameConverter(palette_file = "Diamondus_2.pal")
+    renderer = FrameConverter(palette_file = palette_file)
     for setnum, s in enumerate(j2a.sets):
         s = j2a.sets[setnum]
         setdir = os.path.join(outputdir, str(setnum))
@@ -37,6 +35,23 @@ def main():
                 ))
                 renderer.to_image(frame).save(imgfilename)
         print("Finished extracting set %d (%d animations)" % (setnum, animnum + 1))
+    return 0
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.set_defaults(
+        anims_file = None,
+        destination_folder = None,
+        palette = os.path.join(os.path.dirname(sys.argv[0]), "Diamondus_2.pal")
+    )
+    parser.add_argument("anims_file", nargs="?", help="path to the .j2a file to extract")
+    parser.add_argument("destination_folder", nargs="?", help="where to extract data (parent folder must exist)")
+    parser.add_argument("--palette", help="palette file to use for extraction")
+    args = parser.parse_args()
+
+    animsfilename = args.anims_file if not args.anims_file is None else \
+        input("Please type the path to the .j2a file you wish to extract (current folder: %s):\n" % os.getcwd())
+    return legacy_extractor(animsfilename, args.destination_folder, args.palette)
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

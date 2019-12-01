@@ -2,13 +2,11 @@ from __future__ import print_function
 import os
 import sys
 import logging
+import argparse
 import glob
-import struct
 import re
-import zlib
 from PIL import Image
 from j2a import J2A, FrameConverter
-import misc
 
 if sys.version_info[0] <= 2:
     input = raw_input
@@ -25,16 +23,15 @@ def get_numeric_subdirs(folder = "."):
     return [dirname for dirname in dirlist if os.path.isdir(dirname)]
 
 
-def main():
-    dirname = sys.argv[1] if (len(sys.argv) >= 2) else \
-        input("Please type the folder you wish to import:\n")
+def legacy_importer(dirname, outfilename = None, palette = "Diamondus_2.pal"):
     dirname = os.path.abspath(dirname)
-    if not os.path.basename(dirname).endswith("-j2a"):
-        error("Folder name is improperly formatted (must be named ***-j2a)!")
-        return 1
-    outfilename = sys.argv[2] if (len(sys.argv) >= 3) else dirname.replace("-j2a", ".j2a")
+    if outfilename is None:
+        if not os.path.basename(dirname).endswith("-j2a"):
+            error("Folder name is improperly formatted (must be named ***-j2a)!")
+            return 1
+        outfilename = dirname.replace("-j2a", ".j2a")
     outfilename = os.path.abspath(outfilename)
-    fconv = FrameConverter(palette_file = "Diamondus_2.pal")
+    fconv = FrameConverter(palette_file = palette)
     os.chdir(dirname)
     setdirlist = get_numeric_subdirs()
     if not setdirlist:
@@ -92,6 +89,21 @@ def main():
     anims.write()
     return 0
 
+def main():
+    parser = argparse.ArgumentParser()
+    parser.set_defaults(
+        source_folder = None,
+        anims_file = None,
+        palette = os.path.join(os.path.dirname(sys.argv[0]), "Diamondus_2.pal")
+    )
+    parser.add_argument("source_folder", nargs="?", help="path to the folder to import")
+    parser.add_argument("anims_file", nargs="?", help="path to the .j2a file to produce (parent folder must exist)")
+    parser.add_argument("--palette", help="palette file to use for import")
+    args = parser.parse_args()
+
+    source_dir = args.source_folder if not args.source_folder is None else \
+        input("Please type the folder you wish to import (current folder: %s):\n" % os.getcwd())
+    return legacy_importer(source_dir, args.anims_file, args.palette)
 
 if __name__ == "__main__":
     sys.exit(main())

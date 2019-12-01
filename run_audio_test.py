@@ -122,6 +122,55 @@ def play_sample(set_num, sample_num, sample_rate=1.0):
     with PyAudioSoundPlayer() as audio_out:
         _play_sample(audio_out, _read_hdr(), set_num, sample_num, sample_rate)
 
+class RIFFPacker(bytes):
+    def __new__(cls, name, *pargs):
+        if not isinstance(name, (bytes, bytearray)) or len(name) != 4:
+            raise ValueError("name must be a bytes-like object of length exactly 4")
+
+        chunk_length = sum(map(len, pargs))
+        padding = b'\x00' * (chunk_length & 1)
+        return b''.join((name, struct.pack("<L", chunk_length)) + pargs + (padding,))
+
+def wave_gen():
+    import wave
+    import io
+    import chunk
+
+    with open("dog.wav", "rb") as f:
+        wavdata = f.read()
+
+    with wave.open(io.BytesIO(wavdata), "rb") as f:
+        sdata = f.readframes(1000000)
+        smetadata = f.getparams()
+
+    with io.BytesIO() as f:
+        f.write(
+            RIFFPacker(
+                b'RIFF',
+                b'WAVE',
+                RIFFPacker(
+                    b'fmt ',
+                    struct.pack("<HHLLHH",
+                        1,  # 1 => linear PCM
+                        smetadata.nchannels,  # numchannels
+                        smetadata.framerate,  # samplerate
+                        smetadata.framerate * smetadata.nchannels * smetadata.sampwidth,  # byterate
+                        smetadata.nchannels * smetadata.sampwidth,  # blockalign
+                        8 * smetadata.sampwidth,  # bitspersample
+                    )
+                ),
+                RIFFPacker(
+                    b'data',
+                    sdata
+                )
+            )
+        )
+        wavdata2 = f.getvalue()
+
+    if wavdata != wavdata2:
+        print(wavdata[:0x40].hex())
+        print(wavdata2[:0x40].hex())
+
 def sample_console():
     '''
     A minimal console to play with samples from Anims.j2a
