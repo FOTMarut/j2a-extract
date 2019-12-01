@@ -16,22 +16,22 @@ from PIL import Image
 
 import misc
 
-if sys.version_info[0] < 3:
+if sys.version_info[0] <= 2:
     zip = itertools.izip
     as_compressible = lambda x : bytes(x)
 else:
     as_compressible = lambda x : x
 
-_logger   = logging.getLogger(__name__)
-if not getattr(_logger, "handlers", False):
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
+logger.propagate = False
+if not getattr(logger, "handlers", False):
     handler   = logging.StreamHandler()
     formatter = logging.Formatter("%(levelname)s:%(name)s: %(message)s")
-    warning   = _logger.warning
-    _logger.setLevel(logging.DEBUG)
-    handler.setLevel(logging.DEBUG)
     handler.setFormatter(formatter)
-    _logger.addHandler(handler)
+    logger.addHandler(handler)
     del handler, formatter
+error, warning, info = logger.error, logger.warning, logger.info
 
 # From the official Python docs
 def pairwise(iterable):
