@@ -469,6 +469,21 @@ class J2A:
         elif delta < 0:
             raise J2A.ParsingError("File is not a valid J2A file (overlapping sets)")
 
+    def _get_setlist(self, *pargs):
+        if not pargs:  # Default to all sets, unless explicitly passed an empty iterable
+            return self.sets
+        if len(pargs) == 1 and hasattr(pargs[0], "__iter__"):
+            pargs = pargs[0]
+
+        def get_set(arg):
+            if isinstance(arg, int):
+                return self.sets[arg]
+            elif arg in self.sets:
+                return arg
+            raise ValueError("arguments must be either indexes or sets already belonging to the J2A instance")
+
+        return list(map(get_set, pargs))
+
     def read(self):
         ''' reads whole J2A file, parses ALIB and ANIM headers and collects all sets '''
         with open(self.filename, "rb") as j2afile:
@@ -505,8 +520,8 @@ class J2A:
 
         return self
 
-    def unpack(self):
-        for s in self.sets:
+    def unpack(self, *pargs):
+        for s in self._get_setlist(*pargs):
             s.unpack()
         return self
 
@@ -564,8 +579,8 @@ class J2A:
                 f.write(extra_data)
         return self
 
-    def pack(self):
-        for s in self.sets:
+    def pack(self, *pargs):
+        for s in self._get_setlist(*pargs):
             s.pack(self.config)
         return self
 
