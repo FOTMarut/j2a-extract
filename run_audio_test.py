@@ -7,10 +7,17 @@ from types import FunctionType
 
 from j2a import J2A
 import misc
-from run_test import _read_hdr
 
 if sys.version_info[0] <= 2:
     input = raw_input
+
+def _read_hdr():
+    global anims, anims_path
+    if "anims" in globals():
+        return anims
+    else:
+        print("Reading animations file", anims_path)
+        return J2A(anims_path).read()
 
 S_Header = misc.NamedStruct(
     "L|total_size/"      # 0x0  - 0x4  (inclusive)
@@ -61,16 +68,16 @@ class PyAudioSoundPlayer(object):
         self._p.terminate()
         return False
 
-    def play(self, samples, format, nchannels, framerate, verbose=True, **kwargs):
+    def play(self, samples, format, nchannels, rate, verbose=True, **kwargs):
         import pyaudio
         if kwargs:
             print("Warning: ignored extra keyword arguments:", *kwargs)
         if verbose:
             print("Using sampling rate:", framerate)
-        sample_type = getattr(pyaudio, "pa" + format)
+        sample_type = getattr(pyaudio, "pa" + format, "Hz")
         stream = self._p.open(format=sample_type,
                               channels=nchannels,
-                              rate=framerate,
+                              rate=rate,
                               output=True)
         if isinstance(samples, (bytes, bytearray)):
             samples = (samples, )
@@ -78,6 +85,19 @@ class PyAudioSoundPlayer(object):
             stream.write(s)
         stream.write(b'\x00' * 8000)  # Some silence, to avoid early cutting off
         stream.stop_stream()
+
+def GetDefaultSoundPlayer(*pargs, **kwargs):
+    try:
+        import pyaudio
+        return PyAudioSoundPlayer(*pargs, **kwargs)
+    except:
+        pass
+
+    try:
+        import pulseaudio_interface_v1
+        return pulseaudio_interface_v1.PulseAudioSoundPlayer(*pargs, **kwargs)
+    except:
+        raise RuntimeError("No audio interfaces available")
 
 def _play_sample(audio_out, anims, set_num, sample_num, sample_rate):
     s = anims.sets[int(set_num)]
@@ -105,7 +125,7 @@ def _play_sample(audio_out, anims, set_num, sample_num, sample_rate):
         is_16bit  = bool(sample._bits == 16)
         rate = sample._rate
         print("Reported sampling rate:", rate)
-        audio_out.play(sample._data, nchannels = sample._channels, framerate = get_rate(rate), format = ("Int8", "Int16")[is_16bit])
+        audio_out.play(sample._data, nchannels = sample._channels, rate = get_rate(rate), format = ("Int8", "Int16")[is_16bit])
 
 def play_sample(set_num, sample_num, sample_rate=1.0):
     '''
@@ -119,7 +139,7 @@ def play_sample(set_num, sample_num, sample_rate=1.0):
      - omitted, which is equivalent to "*1"
     '''
 
-    with PyAudioSoundPlayer() as audio_out:
+    with GetDefaultSoundPlayer() as audio_out:
         _play_sample(audio_out, _read_hdr(), set_num, sample_num, sample_rate)
 
 class RIFFPacker(bytes):
@@ -186,7 +206,7 @@ def sample_console():
     s_old = ""
     print("Type CTRL-C to exit")
 
-    with PyAudioSoundPlayer() as audio_out:
+    with GetDefaultSoundPlayer() as audio_out:
         while True:
             try:
                 s = input("> ")
@@ -235,7 +255,7 @@ def dump_samples_data_slice(filename, start=0, size=0x20):
 if __name__ == "__main__":
     fmap = dict((k, v) for k,v in globals().items() if isinstance(v, FunctionType) and not k.startswith('_'))
 
-    assert int(True) is 1
+    assert int(True) == 1
     isint = lambda x : x[int(x[:1] in '+-'):].isdigit()
 
     anims_path = None
