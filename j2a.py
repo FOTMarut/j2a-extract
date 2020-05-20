@@ -227,9 +227,9 @@ class J2A:
                             mask_data += f.mask + b'\x00' * (-len(f.mask) & 3)
 
                 if null_pixmaps > 0:
-                    J2A._error_action[config["null_image"]]("found %d frames with null images" % null_pixmaps, J2A.J2A.PackingError)
+                    J2A._error_action[config["null_image"]]("found %d frames with null images" % null_pixmaps, J2A.PackingError)
                 if null_masks > 0:
-                    J2A._error_action[config["null_mask" ]]("found %d frames with null masks"  % null_masks  , J2A.J2A.PackingError)
+                    J2A._error_action[config["null_mask" ]]("found %d frames with null masks"  % null_masks  , J2A.PackingError)
 
                 img_length = len(img_data)
                 for frame_info in l_frameinfo:
@@ -312,7 +312,8 @@ class J2A:
                 coldspot = (frameinfo["coldspotx"], frameinfo["coldspoty"]),
                 gunspot = (frameinfo["gunspotx"], frameinfo["gunspoty"]),
                 rle_encoded_pixmap = imagedata[4:],
-                mask = maskdata,
+#                 mask = maskdata,
+                mask = maskdata and maskdata[:(width * height + 7) >> 3],  # None or an appropriately-sized bytearray
                 tagged = tagged
             )
 
@@ -394,6 +395,7 @@ class J2A:
         def __init__(self, data, sample_rate=None, volume=None, bits=8, channels=1, loop=None):
             assert not sample_rate is None and not volume is None
             assert isinstance(data, (bytes, bytearray))
+            assert (len(data) << 3) % (channels * bits) == 0
             self._data, self._rate, self.volume, self._bits, self._channels, self.loop = \
                 data, sample_rate, volume, bits, channels, loop
 
