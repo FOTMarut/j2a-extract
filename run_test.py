@@ -11,6 +11,7 @@ from j2a import J2A, FrameConverter
 
 if sys.version_info[0] <= 2:
     input = raw_input
+    zip = itertools.izip
     if isinstance(__builtins__, dict):  # Needed for cProfile with Python 2
         class BuiltinsWrapper(object):
             __getattr__ = __builtins__.__getitem__
@@ -54,25 +55,26 @@ def _setup_pseudo_io(restore=False):
 _setup_pseudo_io.outputs = {}
 
 def _assert_equal_anims(anims1, anims2):
-    assert isinstance(anims1, J2A)
-    assert isinstance(anims2, J2A)
-    assert len(anims1.sets) == len(anims2.sets)
-    for set1, set2 in zip(anims1.sets, anims2.sets):
-        assert len(set1.animations) == len(set2.animations)
-        assert len(set1.samples)    == len(set2.samples)
-        for anim1, anim2 in zip(set1.animations, set2.animations):
-            assert anim1.fps         == anim2.fps
-            assert len(anim1.frames) == len(anim2.frames)
-            for frame1, frame2 in zip(anim1.frames, anim2.frames):
-                frame1.encode_image(), frame2.encode_image()
+    assert isinstance(anims1, J2A), "argument 1 is not a J2A instance"
+    assert isinstance(anims2, J2A), "argument 2 is not a J2A instance"
+    assert len(anims1.sets) == len(anims2.sets), "different number of sets"
+    for set_num, set1, set2 in zip(itertools.count(), anims1.sets, anims2.sets):
+        assert len(set1.animations) == len(set2.animations), "different number of animations in set %d" % set_num
+        assert len(set1.samples)    == len(set2.samples),    "different number of samples in set %d" % set_num
+        for anim_num, anim1, anim2 in zip(itertools.count(), set1.animations, set2.animations):
+            assert anim1.fps         == anim2.fps,         "animations %d/%d differ" % (set_num, anim_num)
+            assert len(anim1.frames) == len(anim2.frames), "animations %d/%d differ" % (set_num, anim_num)
+            for frame_num, frame1, frame2 in zip(itertools.count(), anim1.frames, anim2.frames):
+                frame1.decode_image().encode_image(), frame2.decode_image().encode_image()
                 for fprop in ("shape", "origin", "coldspot", "gunspot", "_rle_encoded_pixmap", "tagged"):
-                    assert getattr(frame1, fprop) == getattr(frame2, fprop)
+                    assert getattr(frame1, fprop) == getattr(frame2, fprop), "frames %d/%d/%d differ" % (set_num, anim_num, frame_num)
                 if frame1.mask != frame2.mask:
                     for mask in (frame1.mask, frame2.mask):
-                        assert mask is None or not any(mask)
-        for samp1, samp2 in zip(set1.samples, set2.samples):
+                        assert mask is None or not any(mask), "frames %d/%d/%d have different masks" % (set_num, anim_num, frame_num)
+                        print("Warning: frames %d/%d/%d have both null masks, but with encoded differently" % (set_num, anim_num, frame_num), file=sys.stderr)
+        for sample_num, samp1, samp2 in zip(itertools.count(), set1.samples, set2.samples):
             for sprop in ("_data", "_rate", "volume", "_bits", "_channels", "loop"):
-                assert getattr(samp1, sprop) == getattr(samp2, sprop)
+                assert getattr(samp1, sprop) == getattr(samp2, sprop), "samples %d(%d/%d) have different field '%s'" % (set1.samplesbaseindex + sample_num, set_num, sample_num, sprop)
 #                         assert pixmap is None or not any(any(row) for row in pixmap)
 
 #############################################################################################################
