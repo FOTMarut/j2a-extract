@@ -462,6 +462,18 @@ class J2A:
         return self
 
     @staticmethod
+    def _open(filespec, mode, *pargs, **kwargs):
+        if isinstance(filespec, (int, str)):
+            return open(filespec, mode, *pargs, **kwargs)
+        else:  # Assume it's a file object
+            method = {"r": "read", "w": "write"}[mode[:1]]
+            if hasattr(filespec, method):
+                return filespec
+            else:
+                ErrorClass = {"r": J2A.ParsingError, "w": J2A.PackingError}[mode[:1]]
+                raise ErrorClass("'filename' must be either a path, a file descriptor or an object with a '%s' method" % method)
+
+    @staticmethod
     def _seek(f, newpos):
         delta = newpos - f.tell()
         if delta > 0:
@@ -486,9 +498,14 @@ class J2A:
 
         return list(map(get_set, pargs))
 
-    def read(self):
+    def read(self, filename=None):
         ''' reads whole J2A file, parses ALIB and ANIM headers and collects all sets '''
-        with open(self.filename, "rb") as j2afile:
+        if filename is None:
+            filename = self.filename
+            if filename is None:
+                raise J2A.ParsingError("no filename specified")
+
+        with J2A._open(filename, "rb") as j2afile:
             # TODO: maybe add a separate check for ALIB version?
             try:
                 alibheader = self._Header.unpack(j2afile.read(self._Header.size))
@@ -563,7 +580,7 @@ class J2A:
                 cur_offset += len(extra_data)
                 assert crc == target_crc and cur_offset == target_filesize
 
-        with open(filename, "wb") as f:
+        with J2A._open(filename, "wb") as f:
             f.write(J2A._Header.pack(
                 signature=b'ALIB',
                 magic=0x00BEBA00,

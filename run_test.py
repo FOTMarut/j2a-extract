@@ -12,6 +12,7 @@ from j2a import J2A, FrameConverter
 if sys.version_info[0] <= 2:
     input = raw_input
     zip = itertools.izip
+    # TODO: fix this, these are implementation details
     if isinstance(__builtins__, dict):  # Needed for cProfile with Python 2
         class BuiltinsWrapper(object):
             __getattr__ = __builtins__.__getitem__
@@ -23,36 +24,31 @@ else:
     import builtins
 
 def _read_hdr():
-    global anims, anims_path
+    global anims
     if "anims" in globals():
         return anims
     else:
         print("Reading animations file", anims_path)
-        return J2A(anims_path).read()
+        anims = J2A(anims_path).read()
+        return anims
+
+def _get_temp_file_object():
+    '''
+    Returns a BytesIO object prepared for multiple uses
+    Only works when using context managers, not manual open() and close()
+    '''
+    import io
+    class ReBytesIO(io.BytesIO):
+        def __init__(self, *pargs, **kwargs):
+            super(ReBytesIO, self).__init__(*pargs, **kwargs)
+        def __enter__(self):
+            self.seek(0)
+            return self
+        def __exit__(*pargs):
+            pass
+    return ReBytesIO()
 
 _original_open = open
-
-def _open_mock(filename, mode):
-    import io
-    if filename.startswith("TEST"):
-        assert mode in ("rb", "wb")
-        if mode == "rb":
-            retval = _setup_pseudo_io.outputs[filename]
-            retval.seek(0)
-        else:  # mode == "wb"
-            retval = io.BytesIO()
-            retval.close = lambda : None  # Closing a BytesIO object destroys the buffer
-            _setup_pseudo_io.outputs[filename] = retval
-        return retval
-    else:
-        return _original_open(filename, mode)
-
-def _setup_pseudo_io(restore=False):
-    if restore:
-        builtins.open = _original_open
-    else:
-        builtins.open = _open_mock
-_setup_pseudo_io.outputs = {}
 
 def _assert_equal_anims(anims1, anims2):
     assert isinstance(anims1, J2A), "argument 1 is not a J2A instance"
@@ -174,9 +170,9 @@ def stress_test():
 def writing_test():
     anims = _read_hdr()
     anims.unpack()
-    _setup_pseudo_io()
-    anims.write("TEST")
-    anims2 = J2A("TEST").read().unpack()
+    temp_file = _get_temp_file_object()
+    anims.write(temp_file)
+    anims2 = J2A(temp_file).read().unpack()
 
 def unpacking_test():
     anims = _read_hdr()
@@ -245,8 +241,8 @@ def full_cycle():
         for anim in s.animations:
             for frame in anim.frames:
                 frame.decode_image()
-    _setup_pseudo_io()
-    anims.write("TEST")
+    temp_file = _get_temp_file_object()
+    anims.write(test_file)
 
 def full_cycle_test():
     anims1 = _read_hdr()
@@ -254,9 +250,9 @@ def full_cycle_test():
         for anim in s.animations:
             for frame in anim.frames:
                 frame.decode_image()
-    _setup_pseudo_io()
-    anims1.write("TEST")
-    anims2 = J2A("TEST").read()
+    temp_file = _get_temp_file_object()
+    anims1.write(temp_file)
+    anims2 = J2A(temp_file).read()
     _assert_equal_anims(anims1, anims2)
     print("Test PASSED")
 
