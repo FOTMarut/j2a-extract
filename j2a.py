@@ -650,6 +650,7 @@ class FrameConverter(object):
         elif mode == "P":
             img.putdata(list(itertools.chain(*frame.decode_image()._pixmap)))
             img.putpalette(self._palette_flat)
+            # This alone won't actually export the transparency in Pillow version < 2.3
             img.info["transparency"] = 0
         else:
             raise ValueError("unsupported mode")

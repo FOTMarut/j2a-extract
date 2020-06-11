@@ -91,7 +91,21 @@ def show_frame(set_num, anim_num, frame_num):
         plt.axis('off')
         plt.show()
     except ImportError:
+        # In Python 2, showing images with Pillow with proper transparency is not supported
         renderer.to_image(frame, "P").show()
+
+def export_frame(set_num, anim_num, frame_num, path):
+    anims = _read_hdr()
+    try:
+        frame = anims.sets[set_num].animations[anim_num].frames[frame_num]
+    except IndexError:
+        print("Error: some index was out of bounds")
+        return 1
+
+    renderer = FrameConverter(palette_file = "Diamondus_2.pal")
+    image = renderer.to_image(frame, "P")
+    # Transparency arg only needed for very old versions of Pillow
+    image.save(path, transparency = 0)
 
 def show_anim(set_num, anim_num):
     import numpy as np
