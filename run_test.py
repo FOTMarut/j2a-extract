@@ -12,16 +12,6 @@ from j2a import J2A, FrameConverter
 if sys.version_info[0] <= 2:
     input = raw_input
     zip = itertools.izip
-    # TODO: fix this, these are implementation details
-    if isinstance(__builtins__, dict):  # Needed for cProfile with Python 2
-        class BuiltinsWrapper(object):
-            __getattr__ = __builtins__.__getitem__
-            __setattr__ = __builtins__.__setitem__
-        builtins = BuiltinsWrapper()
-    else:
-        builtins = __builtins__
-else:
-    import builtins
 
 def _read_hdr():
     global anims
@@ -390,6 +380,118 @@ def gen_bigimage(filename):
     big_frame = J2A.Frame(shape = (global_width, global_height), pixmap = big_pixmap)
     FrameConverter(palette_file = "Diamondus_2.pal").to_image(big_frame).save(filename)
 
+def unittest_metadata(*pargs):
+    import unittest
+    import j2metadata
+
+    class MetadataTest(unittest.TestCase):
+        anims          = _read_hdr()
+        j2a_md_iface   = j2metadata.j2a_metadata_interface
+        globalDefaults = dict(j2metadata.globalDefaults, J2A_defaults = {})
+        def_metadata   = j2a_md_iface.generate_metadata(anims, globalDefaults)
+        raw_metadata   = j2a_md_iface.generate_metadata(anims)
+
+        @classmethod
+        def compare_md(cls, md1, md2):
+            keys1, keys2 = set(md1.keys()), set(md2.keys())
+            if keys1 - keys2:
+                return "[{!r}] only in first argument".format( (keys1 - keys2).pop() )
+            if keys2 - keys1:
+                return "[{!r}] only in second argument".format( (keys2 - keys1).pop() )
+            for k,v1 in md1.items():
+                v2 = md2[k]
+                if isinstance(v1, dict) and isinstance(v2, dict):
+                    result = cls.compare_md(v1, v2)
+                    if result is not None:
+                        return "[{!r}]".format(k) + result
+                elif v1 != v2:
+                    return "[{!r}] differ".format(k)
+
+        @classmethod
+        def fast_deepcopy(cls, md):
+            'Clone metadata. MUCH faster than copy.deepcopy(), but also hacky.'
+            return dict((k, cls.fast_deepcopy(v) if type(v) is dict else v) for k, v in md.items())
+
+        @classmethod
+        def get_def_metadata(cls):
+            return cls.fast_deepcopy(cls.def_metadata)
+
+        @staticmethod
+        def _test_1_impl(md_iface, md):
+            for child_md_iface in md_iface.children:
+                sub = md[child_md_iface.sub_name]
+                sub_count = sub["count"]
+                child_defs_names = (child_md_iface.defs_name,) + child_md_iface.descendant_defs_names
+                if sub_count <= 1:
+                    assert not set(child_defs_names) & set(md.keys())
+                else:
+                    sub_list = [sub.get(i, {}) for i in range(sub_count)]
+                    for k in md.get(child_md_iface.defs_name, {}).keys():
+                        nr_present = len([child for child in sub_list if k in child])
+                        assert nr_present * 2 < sub_count, \
+                            "Element of type {} had {} occurrences of key {} among {} children, out of a total of {}".format(
+                                md_iface.name, nr_present, k, child_md_iface.name, sub_count
+                            )
+                        assert nr_present * 2 < sub_count
+                    for defs_name in set(child_defs_names[1:]) & set(md.keys()):
+                        for k in md[defs_name].keys():
+                            nr_present = len([child for child in sub_list if k in child.get(defs_name, {})])
+                            assert nr_present * 2 < sub_count, \
+                                "Element of type {} had {} occurrences of key {} among {} of {} children, out of a total of {}".format(
+                                    md_iface.name, nr_present, k, defs_name, child_md_iface.name, sub_count
+                                )
+
+        def test_1(self):
+            # No property defaults for an only child
+            # Each default must not be overridden by 50% of the children or more
+            md = self.get_def_metadata()
+            self.j2a_md_iface.recursive_apply(md, func_before = self._test_1_impl)
+
+        def test_2(self):
+            # Metadata should be consistent regardless of defaults propagation
+            def_md = self.j2a_md_iface._generate_metadata(self.anims, True)
+            self.j2a_md_iface.propagate_defaults(def_md, dict((k, {}) for k in self.globalDefaults.keys()))
+            result = self.compare_md(def_md, self.raw_metadata)
+            assert result is None, result
+
+        def test_3(self):
+            # Metadata should be consistent regardless of defaults propagation
+            def_md = self.get_def_metadata()
+            self.j2a_md_iface.propagate_defaults(def_md, self.globalDefaults)
+            strip_path_templates = lambda md_iface, md : ((), md.pop("path_template", None))[0]
+            self.j2a_md_iface.recursive_apply(def_md, func_before = strip_path_templates, child_accessor = dict.setdefault)
+            result = self.compare_md(def_md, self.raw_metadata)
+            assert result is None, result
+
+        @classmethod
+        def _test_4_impl(cls, d):
+            if not d:
+                return " is empty"
+            for k, v in d.items():
+                if type(v) is dict:
+                    retval = cls._test_4_impl(v)
+                    if retval is not None:
+                        return "[{!r}]{}".format(k, retval)
+
+        def test_4(self):
+            # No empty dicts allowed
+            result = self._test_4_impl(self.get_def_metadata())
+            assert result is None, result
+
+        def test_5(self):
+            # Raw metadata must validate
+            self.j2a_md_iface.validate_metadata(self.raw_metadata, self.globalDefaults)
+
+        def test_6(self):
+            # Defaulted metadata must validate
+            self.j2a_md_iface.validate_metadata(self.def_metadata, self.globalDefaults)
+
+    if pargs:
+        tests = (MetadataTest("test_" + str(t)) for t in pargs)
+    else:
+        tests = [MetadataTest(k) for k in vars(MetadataTest).keys() if k.startswith("test_")]
+    unittest.TextTestRunner().run(unittest.TestSuite(tests=tests))
+
 def profile_func(funcname, mode, *pargs):
     '''
     Call function repeatedly according to the condition specified by `mode`.
@@ -425,6 +527,33 @@ def profile_func(funcname, mode, *pargs):
         else:
             print("Running for {0:.3f} s, {1} iterations".format(curtime-startingtime, i))
             return
+
+def help(funcname=None):
+    import pydoc
+    td = pydoc.TextDoc()
+
+    try:
+        assert hasattr(sys.stdout, "isatty") and sys.stdout.isatty()
+        from curses import setupterm, tigetstr
+        setupterm()
+        boldin  = tigetstr("bold").decode()
+        boldout = tigetstr("sgr0").decode()
+        td.bold = lambda t : boldin + t + boldout
+    except:
+        td.bold = lambda t : t
+
+    if funcname is None:
+        print(
+                "Usage: %s <funcname> <arguments>\n"
+                "The first argument ending in '.j2a' (if any) is interpreted as the\n"
+                "source J2A file, otherwise it defaults to 'Anims.j2a'.\n"
+                "Arguments are converted to int if applicable.\n"
+                "Recognized functions:\n" % sys.argv[0],
+                *[td.docroutine(f) for f in fmap.values()],
+                sep="\n"
+                )
+    else:
+        print(td.docroutine(fmap[funcname]))
 
 #############################################################################################################
 

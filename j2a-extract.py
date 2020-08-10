@@ -1,7 +1,7 @@
 from __future__ import print_function
 import os
 import sys
-# import itertools
+import itertools
 import logging
 from logging import error, warning, info
 import argparse
@@ -9,6 +9,7 @@ import json
 import wave
 import j2a
 from j2a import J2A, FrameConverter
+import j2metadata
 
 if sys.version_info[0] <= 2:
     input = raw_input
@@ -19,9 +20,9 @@ def mkdir(*pargs):
         os.mkdir(dirname)
     return dirname
 
-def get_default_foldername(outputdir, filename, default_foldername, func):
-    if outputdir is not None:
-        foldername = outputdir
+def get_default_foldername(dest_folder, filename, default_foldername, func):
+    if dest_folder is not None:
+        foldername = dest_folder
     elif isinstance(filename, int):
         foldername = default_foldername
     else:
@@ -65,206 +66,22 @@ def legacy_extractor(animsfilename, outputdir = None, palette_file = "Diamondus_
         info("Finished extracting set %d (%d animations)", setnum, animnum + 1)
     return 0
 
-# Paths must use "/" as a separator; the code will replace with the current platform separator, if necessary
-globalDefaults = dict(
-    set_defaults = {
-        "path_template": "set-%03d/"
-    },
-    animation_defaults = {
-        "path_template": "animation-%03d/",
-        "fps"          : 10
-    },
-    frame_defaults = {
-        "path_template": "frame-%03d.png",
-        "hotspot"      : (0, 0),
-        "coldspot"     : (0, 0),
-        "gunspot"      : (0, 0),
-        "tagged"       : False,
-        "mask"         : True
-    },
-    sample_defaults = {
-        "path_template": "sample-%03d.wav",
-        "volume"       : 32767,
-        "loop_start"   : 0,
-        "loop_end"     : None,
-        "loop_bidi"    : False
-    }
-)
-
-defaultKeys = {
-    "set_defaults"      : tuple(k for k in globalDefaults["set_defaults"].keys()       if k != "path_template"),
-    "animation_defaults": tuple(k for k in globalDefaults["animation_defaults"].keys() if k != "path_template"),
-    "frame_defaults"    : tuple(k for k in globalDefaults["frame_defaults"].keys()     if k != "path_template"),
-    "sample_defaults"   : tuple(k for k in globalDefaults["sample_defaults"].keys()    if k != "path_template")
-}
-
-class PropertiesCounter(object):
-    __slots__ = ["_properties", "_threshold", "_min_count"]
-
-    def __init__(self, properties, threshold, min_count):
-        '''
-        properties: an iterable returning the keys to look for
-        threshold:  when querying modes, ignore for each key those that don't surpass
-                    this quota over the total number of values given for the key
-                    default: 0.5 (>50%)
-        '''
-        self._properties = dict((prop, dict()) for prop in properties)
-        self._threshold = threshold
-        self._min_count = min_count
-
-    def update(self, d):
-        for k,v in d.items():
-            prop = self._properties[k]
-            prop[v] = prop.get(v, 0) + 1
-
-    def update_single(self, key, value):
-        prop = self._properties[key]
-        prop[value] = prop.get(value, 0) + 1
-
-    def _get_modes_iter(self):
-        for prop, values in self._properties.items():
-            if values:
-                total = sum(values.values())
-                best_val, num_occurrences = max(values.items(), key = lambda t : t[1])
-                if num_occurrences > self._min_count and num_occurrences > self._threshold * total:
-                    yield (prop, best_val)
-
-    def get_modes(self):
-        return dict(self._get_modes_iter())
-
-def strip_matching_defaults(d, defaults):
-    '''
-    d, defaults:    dict
-
-    Return a dict of all key-value pairs in d that don't match what's already in defaults
-    '''
-    dummy = object()
-    return dict((k, v) for k,v in d.items() if isinstance(v, dict) or defaults.get(k, dummy) != v)
-
-def strip_matching_sub_defaults(md, defaults_iter):
-    '''
-    md:             metadata dict
-    defaults_iter:  iterable of (str, dict) tuples
-
-    For each (kind, defaults) tuple in defaults_iter, strip the matching defaults from md[kind].
-    If this would leave it empty, remove it entirely.
-    '''
-    for sub_kind, sub_defaults in defaults_iter:
-        new_sub_md = strip_matching_defaults(md[sub_kind], sub_defaults)
-        if new_sub_md:
-            md[sub_kind] = new_sub_md
-        else:
-            del md[sub_kind]
-
-def condense_metadata(elements_md, main_kind, sub_kinds = (), threshold = 0.5, min_count = 1):
-    '''
-    Pop common key-value pairs among the elements of the given list, including
-    nested defaults, and return a dict mapping each kind to its defaults.
-
-    elements_md:    list of dicts, one for each element, describing its metadata;
-                    will be modified during execution, to remove redundant defaults
-    main_kind:      str, the name under which to wrap the defaults resulting from elements
-    sub_kinds:      0 or more str, nested defaults to look for in each element (optional)
-    '''
-    # Initialize counters for each type of defaults
-    main_defaults_counter = PropertiesCounter(defaultKeys[main_kind], threshold, min_count)
-    sub_defaults_counters = dict( (
-        kind,
-        PropertiesCounter(defaultKeys[kind], threshold, min_count)
-        ) for kind in sub_kinds)
-
-    # Count the number of occurrences for each property
-    for elt_md in elements_md:
-        for k,v in elt_md.items():
-            if k in sub_kinds:
-                sub_defaults_counters[k].update(v)
-            elif not isinstance(v, dict):
-                main_defaults_counter.update_single(k, v)
-
-    # Collect for each property the most common cases
-    sub_metadata = dict((kind, counter.get_modes()) for kind,counter in sub_defaults_counters.items())
-    main_metadata = main_defaults_counter.get_modes()
-
-    # Keep only differences w.r.t. the global defaults
-    elements_md[:] = [strip_matching_defaults(md, main_metadata) for md in elements_md]
-    for elt_md in elements_md:
-        strip_matching_sub_defaults(elt_md, sub_metadata.items())
-
-    sub_metadata[main_kind] = main_metadata
-    return sub_metadata
-
-def iterable_to_dict_items(seq, base_idx = None):
-    if base_idx is not None:
-        yield ("base_idx", base_idx)
-    yield ("count", len(seq))
-    for i,v in enumerate(seq):
-        if v:
-            yield (i, v)
-
-def generate_frame_metadata(frame):
-    return {
-        "hotspot" : frame.origin,
-        "coldspot": frame.coldspot,
-        "gunspot" : frame.gunspot,
-        "tagged"  : frame.tagged,
-        "mask"    : frame.mask is not None and any(frame.mask)  # FIXME: export mask if it's not trivial
-    }
-
-def generate_animation_metadata(anim):
-    frames_md = [generate_frame_metadata(frame) for frame in anim.frames]
-    metadata = condense_metadata(frames_md, "frame_defaults")
-    metadata["frames"] = dict(iterable_to_dict_items(frames_md))
-    metadata["fps"] = anim.fps
-    return metadata
-
-def generate_sample_metadata(sample):
-    loop_start, loop_end, loop_bidi = sample.loop or (0, None, False)
-    return {
-        "volume"    : sample.volume,
-        "loop_start": loop_start,
-        "loop_end"  : loop_end,
-        "loop_bidi" : loop_bidi
-    }
-
-def generate_set_metadata(s):
-    animations_md = [generate_animation_metadata(anim) for anim   in s.animations]
-    samples_md    = [generate_sample_metadata(sample)  for sample in s.samples   ]
-    metadata = condense_metadata(animations_md, "animation_defaults", ("frame_defaults",))
-    metadata.update(condense_metadata(samples_md, "sample_defaults", min_count = 0))
-    metadata["animations"] = dict(iterable_to_dict_items(animations_md))
-    metadata["samples"]    = dict(iterable_to_dict_items(samples_md, base_idx = s.samplesbaseindex))
-    return metadata
-
-def generate_metadata(anims):
-    sets_md = [generate_set_metadata(s) for s in anims.sets]
-    metadata = condense_metadata(sets_md, "set_defaults", ("animation_defaults", "frame_defaults", "sample_defaults"))
-    metadata["sets"] = dict(iterable_to_dict_items(sets_md))
-
-    strip_matching_sub_defaults(metadata, globalDefaults.items())
-
-    # Special case for sets with exactly one sample
-    # Otherwise, we have sample_defaults for just one sample
-    for k,set_md in metadata["sets"].items():
-        if k != "count" and set_md["samples"]["count"] == 1:
-            sample = set_md["samples"].get(0, {})
-            sample_defaults = set_md.pop("sample_defaults", {})
-            if sample or sample_defaults:
-                sample.update(sample_defaults)
-                set_md["samples"][0] = sample
-
-    return metadata
-
-def metadata_based_extractor(animsfilename, outputdir, palette_file, metadata_writer, path_formats, settings_separate):
-    outputdir = get_default_foldername(outputdir, animsfilename, "Anims",
+def metadata_based_extractor(animsfilename, dest_folder, palette_file, metadata_writer, path_formats, extra_args):
+    settings_separate, no_clobber = (getattr(extra_args, k) for k in ("settings", "no_clobber"))
+    dest_folder = get_default_foldername(dest_folder, animsfilename, "Anims",
             lambda fname : fname[:-4] if fname.lower().endswith(".j2a") else fname + "_dir"
             )
     anims = J2A(animsfilename).read()
     fconv = FrameConverter(palette_file = palette_file)
-    info("Extracting to: %s", outputdir)
+    info("Extracting to: %s", dest_folder)
 
     # Pregenerate metadata
     info("Generating metadata")
-    metadata = generate_metadata(anims)
+    j2a_metadata_interface = j2metadata.MetadataInterface( "J2A",
+            children = j2metadata.j2a_metadata_interface.children,
+            md_generator = lambda _ : { "separate_settings": list(settings_separate) }
+            )
+    anims_metadata = j2a_metadata_interface.generate_metadata(anims, dict(j2metadata.globalDefaults))
 
     def frame_writer(frame, path):
         # Setting transparency explicitly to work around limitations of old versions of Pillow
@@ -290,36 +107,41 @@ def metadata_based_extractor(animsfilename, outputdir, palette_file, metadata_wr
         path_formats = dict((k, v.replace("/", os.path.sep)) for k,v in path_formats.items())
 
     tasks = []
+    settings_fmt = "%ssettings." + metadata_writer.extension
 
-    def get_sub_md_and_path(base_metadata, base_path, type, num):
-        child_path = base_path + path_formats[type] % num
-        try:
-            if type in settings_separate:
-                child_md = base_metadata[type + "s"].pop(str(num))
-                tasks.append((metadata_writer, child_md, child_path))
-            else:
-                child_md = base_metadata[type + "s"][str(num)]
-        except KeyError:
-            child_md = {}
+    def coiterate_sub_md(obj_sub, base_metadata, base_path, type):
+        # Iterate through the object list and the corresponding metadata subs at the same time
+        sub_md = base_metadata[type + "s"]
+        fmt = path_formats[type]
+        if type in settings_separate:
+            for child_num, child_obj in enumerate(obj_sub):
+                child_md = sub_md.pop(child_num, {})
+                child_path = fmt % (base_path, child_num)
+                if child_md:
+                    tasks.append((metadata_writer, child_md, settings_fmt % child_path))
+                yield (child_obj, child_md, child_path)
+        else:
+            for child_num, child_obj in enumerate(obj_sub):
+                child_md = sub_md.get(child_num, {})
+                child_path = fmt % (base_path, child_num)
+                yield (child_obj, child_md, child_path)
 
-        return (child_md, child_path)
-
-    base_path = outputdir.rstrip(os.path.sep) + os.path.sep
-    for set_num,s in enumerate(anims.sets):
-        set_md, set_path = get_sub_md_and_path(metadata, base_path, "set", set_num)
-
-        for anim_num,anim in enumerate(s.animations):
-            anim_md, anim_path = get_sub_md_and_path(set_md, set_path, "animation", anim_num)
-
-            for frame_num,frame in enumerate(anim.frames):
-                frame_md, frame_path = get_sub_md_and_path(anim_md, anim_path, "frame", frame_num)
+    base_path = dest_folder.rstrip(os.path.sep) + os.path.sep
+    for s,set_md,set_path in coiterate_sub_md(anims.sets, anims_metadata, base_path, "set"):
+        for anim,anim_md,anim_path in coiterate_sub_md(s.animations, set_md, set_path, "animation"):
+            for frame,frame_md,frame_path in coiterate_sub_md(anim.frames, anim_md, anim_path, "frame"):
                 tasks.append((frame_writer, frame, frame_path))
-
-        for sample_num,sample in enumerate(s.samples):
-            sample_md, sample_path = get_sub_md_and_path(set_md, set_path, "sample", sample_num)
+        for sample,sample_md,sample_path in coiterate_sub_md(s.samples, set_md, set_path, "sample"):
             tasks.append((sample_writer, sample, sample_path))
 
-    tasks.append((metadata_writer, metadata, base_path))
+    tasks.append((metadata_writer, anims_metadata, settings_fmt % base_path))
+
+    # Check for existing files
+    if no_clobber:
+        info("Checking for pre-existing files")
+        for method, data, path in tasks:
+            if os.path.isfile(path):
+                raise FileExistsError(path)
 
     # Create all directories beforehand
     info("Populating directories")
@@ -353,9 +175,10 @@ def metadata_based_extractor(animsfilename, outputdir, palette_file, metadata_wr
 
 def json_extractor(*pargs, **kwargs):
     def write_json_metadata_file(metadata, path):
-        with open(path + "settings.json", "w") as f:
+        with open(path, "w") as f:
             json.dump(metadata, f, indent = 2)
             f.write('\n')
+    write_json_metadata_file.extension = "json"
 
     return metadata_based_extractor(*pargs, metadata_writer=write_json_metadata_file, **kwargs)
 
@@ -372,15 +195,15 @@ def yaml_extractor(*pargs, **kwargs):
     Dumper.add_representer(list, sequence_representer)
 
     def write_yaml_metadata_file(metadata, path, __Dumper = Dumper):
-        with open(path + "settings.yaml", "w") as f:
+        with open(path, "w") as f:
             yaml.dump(metadata, f, Dumper = __Dumper, default_flow_style = False)
+    write_yaml_metadata_file.extension = "yaml"
 
     return metadata_based_extractor(*pargs, metadata_writer=write_yaml_metadata_file, **kwargs)
 
 def main(argv):
     # TODO: remove default palette
     # TODO: handle absolute paths?
-    # TODO: add an option to disable file clobbering
     components = ("set", "animation", "frame", "sample")
 
     parser = argparse.ArgumentParser(add_help=False)
@@ -388,15 +211,23 @@ def main(argv):
         palette = os.path.join(os.path.dirname(sys.argv[0]), "Diamondus_2.pal"),
         log_level = logging.WARNING,
         exporter = json_extractor,
-        settings = frozenset(("animation",))
+        settings = frozenset(("animation",)),
+        no_clobber = True
     )
 
     class AdvOptAction(argparse._StoreAction):
-        _used_opts = []
+        _used_opts = set()
 
         def __call__(self, parser, namespace, values, option_string=None):
-            type(self)._used_opts.append(option_string)
+            type(self)._used_opts.add(option_string)
             super(AdvOptAction, self).__call__(parser, namespace, values, option_string)
+
+    class AdvOptConstAction(argparse._StoreConstAction):
+        _used_opts = AdvOptAction._used_opts
+
+        def __call__(self, parser, namespace, values, option_string=None):
+            type(self)._used_opts.add(option_string)
+            super(AdvOptConstAction, self).__call__(parser, namespace, values, option_string)
 
     main_args = parser.add_argument_group("Required arguments")
     main_args.add_argument("anims_file", nargs="?", help="path to the .j2a file to extract")
@@ -427,7 +258,7 @@ def main(argv):
 
     for elt in components:
         help_string = "override format used to generate each %s's path; default: '%s'" \
-                % (elt, globalDefaults["%s_defaults" % elt]["path_template"].replace("%", "%%"))
+                % (elt, j2metadata.globalDefaults["%s_defaults" % elt]["path_template"].replace("%", "%%"))
         adv_group.add_argument(
                 "--%s-path-format" % elt,
                 dest="%s_path_fmt" % elt,
@@ -459,12 +290,15 @@ def main(argv):
                     % ", ".join(parser.get_default("settings"))
             )
 
+    adv_group.add_argument("--clobber", action=AdvOptConstAction, const=False, dest="no_clobber",
+        help="overwrite existing files (default: no, unless using legacy exporter)")
+
     args = parser.parse_args(argv)
 
     if args.exporter is legacy_extractor and AdvOptAction._used_opts:
         parser.error(
                 "the following options are not available for the legacy extractor: %s"
-                % ", ".join(frozenset(AdvOptAction._used_opts))
+                % ", ".join(AdvOptAction._used_opts)
                 )
 
     logging.basicConfig(format="%(levelname)s:j2a-export: %(message)s", level=args.log_level)
@@ -488,12 +322,12 @@ def main(argv):
         for elt in components:
             fmt = getattr(args, "%s_path_fmt" % elt)
             if fmt is None:
-                path_formats[elt] = globalDefaults["%s_defaults" % elt]["path_template"]
+                path_formats[elt] = "%s" + j2metadata.globalDefaults["%s_defaults" % elt]["path_template"]
             else:
-                path_formats[elt] = fmt
+                path_formats[elt] = "%s" + fmt
 
         return args.exporter(animsfilename, args.output_folder, args.palette,
-                path_formats=path_formats, settings_separate=args.settings)
+                path_formats=path_formats, extra_args=args)
 
 if __name__ == "__main__":
     sys.exit(main(sys.argv[1:]))
